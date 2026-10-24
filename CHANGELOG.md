@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T23:20:00+0530 — Beat synchronization
+
+- Changed: Added `beats.py` — ffmpeg-based PCM decode, onset-energy beat detection (60–180 BPM autocorrelation), npz cache with staleness checks, and `BeatGrid` (pulse/phase/nearest queries). Wired into the select-screen analyze thread (no render-loop cost) and PlayScreen (beat-pulsed reference panel border, judgement popup kick). Scoring untouched — visuals only. Fixed `pulse()` off-by-one for beats exactly at t. 7 new tests.
+- Why: Make the arcade feel like a rhythm game — visuals breathe with the music.
+- Validation: `pytest` → 116 passed (synthetic-beat grid queries, cache staleness, silence/no-audio, 120 BPM synthetic clicks). Real extraction on `dance_1.mp4` → 38 beats, ~0.31 s mean spacing. `--game` smoke pending re-check.
+- Limitations: Heuristic onset detection — not librosa-grade; may double-count on busy tracks. Beat-accuracy correlation with actual music untested. No audio device verification done.
+
 ## 2026-10-24T23:05:00+0530 — Real-time gameplay verification + fixes
 
 - Changed: Added `tests/test_gameplay.py` — 6 headless tests driving `PlayScreen.update` with fake camera/tracker/clock: practice mode dt-advance + pause, performance scoring cadence, unreliable-pose combo breaks, camera-failure-as-miss, pause committing nothing, and the RESULT→COMPLETE→ResultsScreen handoff. Fixed `TextField.contains` crash and numpy-float pygame draw crash on the select screen.

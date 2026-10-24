@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pygame
 
+from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
 from ..game import GamePhase, GameSession, grade_for, judge, Judgement
@@ -62,6 +63,7 @@ class AppContext:
         self.moves_path: Path | None = cfg.moves_path
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
+        self.beats = None  # BeatGrid set after analyze; None = no beat sync
         self.t = 0.0
         self.particles = theme.Particles()
         self.quit = False
@@ -307,6 +309,7 @@ class SelectScreen(Screen):
             except Exception as exc:  # surface to UI thread
                 self.error = str(exc)
                 return
+            ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
             self.choreo, self.moves = choreo, moves
 
         self._thread = threading.Thread(target=work, daemon=True)
@@ -614,6 +617,11 @@ class PlayScreen(Screen):
             mult = min(1 + self.session.combo // self.session.config.combo_step, self.session.config.max_multiplier)
             surf.blit(f_med.render(f"COMBO x{mult} ({self.session.combo})", True, theme.CYAN), (900, 52))
         self._panels(ctx, surf)
+        # beat-synced pulse: border glow on the reference panel + popup kick
+        pulse = ctx.beats.pulse(self.session.time) if ctx.beats is not None else 0.0
+        if pulse > 0.05:
+            glow = tuple(int(a + (b - a) * pulse) for a, b in zip(theme.PANEL_EDGE, theme.CYAN))
+            pygame.draw.rect(surf, glow, (30, 110, 600, 470), 1 + int(3 * pulse), border_radius=4)
         # bottom HUD
         acc = getattr(self.session, "current_accuracy", None) or 0.0
         surf.blit(f_sm.render(f"ACCURACY {acc * 100:3.0f}%", True, theme.TEXT), (30, 600))
@@ -634,7 +642,7 @@ class PlayScreen(Screen):
                 continue
             scale = 1.0 + 0.6 * max(0.0, 1.0 - age * 4)
             img = theme.glow_text(pygame, f_big, text, color)
-            img = pygame.transform.rotozoom(img, 0, scale)
+            img = pygame.transform.rotozoom(img, 0, scale * (1.0 + 0.25 * pulse))
             img.set_alpha(int(255 * max(0.0, 1.0 - age / POPUP_TTL)))
             surf.blit(img, img.get_rect(center=(W // 2, 90)))
         self.popups = [p for p in self.popups if ctx.t - p[2] < POPUP_TTL]
