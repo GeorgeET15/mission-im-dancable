@@ -1,8 +1,43 @@
 {
+  "id": "dance_1",
+  "title": "Stage routine (dance_1)",
+  "difficulty": "medium",
   "moves": [
-    {"name": "move 1", "start": 0.0, "end": 3.0},
-    {"name": "move 2", "start": 3.0, "end": 6.0},
-    {"name": "move 3", "start": 6.0, "end": 9.0},
-    {"name": "move 4", "start": 9.0, "end": 11.8}
+    {
+      "name": "intro stance",
+      "start": 0.0,
+      "end": 2.0,
+      "instruction": "Stand centred as the lights come up, then drop into a wide stance."
+    },
+    {
+      "name": "wide-stance groove",
+      "start": 2.0,
+      "end": 3.6,
+      "instruction": "Stay low in the wide stance and sway side to side."
+    },
+    {
+      "name": "low kicks",
+      "start": 3.6,
+      "end": 5.6,
+      "instruction": "Hop, crouch, then kick each leg out to the side while staying low."
+    },
+    {
+      "name": "point and turn",
+      "start": 5.6,
+      "end": 7.2,
+      "instruction": "Rise onto one leg, extend an arm to point, then hop into a crouch."
+    },
+    {
+      "name": "bent-forward steps",
+      "start": 7.2,
+      "end": 9.6,
+      "instruction": "Step side to side bent forward, then crouch with hands together."
+    },
+    {
+      "name": "spin and pose",
+      "start": 9.6,
+      "end": 11.8,
+      "instruction": "Turn around and finish facing the front, arms crossed."
+    }
   ]
 }

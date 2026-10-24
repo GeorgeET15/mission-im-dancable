@@ -77,18 +77,22 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
 - **`--mirror`:** flips the reference left-right so the instructor's left side maps to your right — the natural way to copy someone facing you.
 - **Extraction cache:** stored under `cache/` (gitignored). A cache is reused only when the video file, sample rate, model, and confidence all match; otherwise it's re-extracted automatically.
 
-**Move segmentation** is manual via a JSON file:
+**Move segmentation** is manual via a JSON dance-annotation file — `<video-stem>.moves.json` next to the video (auto-detected by the game):
 
 ```json
 {
+  "id": "my-dance",
+  "title": "My dance",
+  "difficulty": "medium",
   "moves": [
-    {"name": "intro sway", "start": 0.0, "end": 2.4},
+    {"name": "intro sway", "start": 0.0, "end": 2.4,
+     "instruction": "shift weight left to right"},
     {"name": "step touch", "start": 2.4, "end": 6.0}
   ]
 }
 ```
 
-Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video duration`. Without `--moves`, the whole video is one move.
+Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video duration`. `id`, `title`, `difficulty` and per-move `instruction` are all optional; instructions appear in Learn Mode. Write boundaries against the real video — the app never invents them. Without a moves file, the whole video is one move.
 
 ### Reference preview (`--preview`)
 
@@ -101,13 +105,28 @@ Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video du
 
 ### Game mode (`--game`)
 
-The pygame-ce dance-arcade UI: neon-purple theme with spotlights, equalizer, and a dance floor. `python -m mission_im_dancable --game` opens the full flow:
+The pygame-ce dance-arcade UI: neon-purple theme with spotlights, equalizer, and a dance floor. `python -m mission_im_dancable --game` opens the home screen with two modes that share one dance library, one reference pipeline, and one pose engine:
 
-- **Screens:** HOME → CHOOSE YOUR DANCE (type a path, click a detected-video card, or BROWSE the filesystem in-game; ANALYZE extracts choreography + beats + audio in the background; `<stem>.moves.json` auto-detected; WATCH plays the whole reference skeleton end-to-end **with the video's audio**) → GET READY (camera opens in the background, live preview, "step into frame" detection hold, 3-2-1 countdown that pauses if tracking drops; camera errors get RETRY/BACK) → gameplay (reference skeleton vs live skeleton + soundtrack synced per move, PERFECT/GREAT/MISS popups, combo milestones, particles, POSE LOST chip on tracking drops; a failing move gets a 5-second COMPLETE-THE-MOVE window — the reference loops the move while you finish it — before the result) → RESULTS (grade S/A/B/C/F, NEW PERSONAL BEST badge, per-move stats, retry / another dance / home). HIGH SCORES persists top runs locally; SETTINGS stores camera index, mirror default, fullscreen, match-window tolerance, and music volume in the user config dir.
-- **Controls:** click or arrows/WS + ENTER on menus · SPACE confirm/start · R retry · P pause · M mirror · Q/Esc back · F11 fullscreen · window is resizable.
-- **Audio:** the selected video's audio track is decoded once (ffmpeg → cached WAV under `cache/`) and played per move segment in performance mode, looped per move in practice, and end-to-end in WATCH. Silent when the video has no audio track or no output device exists.
-- **Scoring:** unchanged from the GameSession — evaluations at fixed 0.25 s intervals (FPS-independent), 100 pts × combo multiplier (×1→×5 every 8 combo), misses break combo, duplicate frames never count. Passing needs mean accuracy ≥ 60% + ≥ 50% reliable evals.
-- **Reference display:** the extracted reference poses render as the same neon skeleton used everywhere else — synchronized to the video's timestamps, so pausing, retrying, and mirroring stay in sync.
+- **LEARN** — study the dance at your own pace, no score and no fail state.
+- **PLAY** — one continuous scored run through the whole dance.
+
+#### Learn Mode
+
+HOME → CHOOSE YOUR DANCE — LEARN (type a path, click a detected-video card, or BROWSE; ANALYZE extracts choreography + beats + audio in the background and reads `<stem>.moves.json` metadata: title, difficulty, per-move instructions) → the learn screen: reference skeleton on the left, live camera on the right, and a seekable segment timeline along the bottom.
+
+- **Controls:** SPACE play/pause · ←/→ seek ±2 s · ,/. step one video frame · N/P next/previous segment (or click a segment block on the timeline) · L loop — off → selected segment → whole dance · -/= playback speed (0.25×–1×) · K mark the selected segment learning → practicing → mastered · M mirror · Q back. Buttons cover the same controls for mouse use.
+- **Feedback:** match % and the single biggest correction ("right shoulder: move up-left") — guidance only, never a score. Audio follows the playhead only at 1× speed.
+- **Progress:** visiting a segment marks it *learning*; K cycles it through *practicing* and *mastered*. Marks are stored per dance in the user data dir — self-reported progress, never auto-judged from pose data.
+- **Camera:** opens in the background; if it fails, Learn Mode keeps working as a watch-only viewer and R retries — the lesson never blocks on hardware.
+
+#### Play Mode
+
+HOME → CHOOSE YOUR DANCE — PLAY (same selection screen, same analyzed dance) → GET READY (camera opens in the background, live preview, "step into frame" detection hold, 3-2-1 countdown that pauses if tracking drops; camera errors get RETRY/BACK) → one continuous run from the first segment's start to the last segment's end (reference skeleton vs live skeleton + soundtrack re-anchored on drift, PERFECT/GREAT/MISS popups, combo milestones, particles, POSE LOST chip on tracking drops, per-segment progress strip — no seeking or mid-run retries) → RESULTS (grade S/A/B/C/F, NEW PERSONAL BEST badge, per-move stats, retry / another dance / home). HIGH SCORES persists top runs locally; SETTINGS stores camera index, mirror default, fullscreen, match-window tolerance, and music volume in the user config dir.
+
+- **Controls:** click or arrows/WS + ENTER on menus · SPACE/P pause · R restart the run · M mirror · Q/Esc back · F11 fullscreen · window is resizable.
+- **Audio:** the selected video's audio track is decoded once (ffmpeg → cached WAV under `cache/`) and plays start-to-finish in Play Mode, follows the playhead in Learn Mode, and runs end-to-end in WATCH. Silent when the video has no audio track or no output device exists.
+- **Scoring:** evaluations at fixed 0.25 s intervals (FPS-independent), 100 pts × combo multiplier (×1→×5 every 8 combo), misses break combo, duplicate frames never count, each eval bucketed into the segment owning its timestamp. Passing a move needs mean accuracy ≥ 60% + ≥ 50% reliable evals.
+- **Reference display:** the extracted reference poses render as the same neon skeleton used everywhere else — synchronized to the video's timestamps, so pausing, seeking, and mirroring stay in sync.
 
 ### Model weights
 

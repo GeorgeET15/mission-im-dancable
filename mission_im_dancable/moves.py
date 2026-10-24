@@ -1,15 +1,20 @@
 """Manual move segmentation loaded from a JSON config file.
 
-Format:
+Format (dance annotation file ``<video-stem>.moves.json``):
 
     {
+      "id": "my-dance",                // optional — defaults to the video stem
+      "title": "My dance",             // optional — display title
+      "difficulty": "medium",          // optional — free text
       "moves": [
-        {"name": "intro sway", "start": 0.0, "end": 2.4},
+        {"name": "intro sway", "start": 0.0, "end": 2.4,
+         "instruction": "shift weight left to right"},   // instruction optional
         {"name": "step touch", "start": 2.4, "end": 6.0}
       ]
     }
 
-Timestamps are seconds within the reference video.
+Timestamps are seconds within the reference video. Segment boundaries are
+written by hand against the real video — nothing here invents them.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ class Move:
     name: str
     start: float
     end: float
+    instruction: str = ""  # optional practice note for Learn Mode
 
     @property
     def duration(self) -> float:
@@ -43,6 +49,17 @@ def default_moves(duration: float) -> list[Move]:
 
 def load_moves(path: Path, video_duration: float) -> list[Move]:
     """Parse and validate a moves JSON file against the video duration."""
+    moves, _ = load_dance_file(path, video_duration)
+    return moves
+
+
+def load_dance_file(path: Path, video_duration: float) -> tuple[list[Move], dict]:
+    """Parse a dance annotation file into (moves, metadata).
+
+    Metadata holds the optional free-text fields ``id``, ``title`` and
+    ``difficulty``; non-string values are ignored so metadata can never
+    break an otherwise valid file.
+    """
     try:
         raw = json.loads(path.read_text())
     except OSError as exc:
@@ -57,10 +74,27 @@ def load_moves(path: Path, video_duration: float) -> list[Move]:
             'e.g. {"moves": [{"name": "step", "start": 0, "end": 2.5}]}'
         )
 
+    meta = {
+        key: raw[key].strip()
+        for key in ("id", "title", "difficulty")
+        if isinstance(raw.get(key), str) and raw[key].strip()
+    }
     moves: list[Move] = []
     for i, item in enumerate(items):
         moves.append(_parse_move(item, i, video_duration, path))
-    return moves
+    return moves, meta
+
+
+def move_index_at(moves: list[Move], t: float) -> int:
+    """Segment index owning time t: the first move whose end is past t.
+
+    Times inside a gap between segments belong to the *upcoming* move —
+    the one the dancer should already be moving into.
+    """
+    for i, move in enumerate(moves):
+        if t < move.end:
+            return i
+    return len(moves) - 1
 
 
 def _parse_move(item: object, index: int, video_duration: float, path: Path) -> Move:
@@ -86,4 +120,12 @@ def _parse_move(item: object, index: int, video_duration: float, path: Path) -> 
             f"{label} ('{name}'): end {end:g}s exceeds the video duration "
             f"({video_duration:g}s)"
         )
-    return Move(name=name.strip(), start=start, end=min(end, video_duration))
+    instruction = item.get("instruction", "")
+    if not isinstance(instruction, str):
+        instruction = ""
+    return Move(
+        name=name.strip(),
+        start=start,
+        end=min(end, video_duration),
+        instruction=instruction.strip(),
+    )

@@ -90,3 +90,58 @@ def add_score(
     scores = scores[:MAX_SCORES]
     _write_json(data_dir() / "highscores.json", scores)
     return scores
+
+
+# -- Learn Mode progress -----------------------------------------------------
+
+# Move statuses are marked by the player, never inferred from pose data —
+# only the dancer knows when a move is actually mastered.
+MOVE_STATUSES = ("learning", "practicing", "mastered")
+
+
+def _progress_path() -> Path:
+    return data_dir() / "progress.json"
+
+
+def load_progress() -> dict:
+    """{video_name: {"moves": {segment_index_str: status}}} — {} when absent."""
+    progress = _read_json(_progress_path(), {})
+    return progress if isinstance(progress, dict) else {}
+
+
+def save_progress(progress: dict) -> None:
+    _write_json(_progress_path(), progress)
+
+
+def move_statuses(video: str) -> dict[int, str]:
+    """{segment_index: status} for one dance; invalid entries are dropped."""
+    raw = load_progress().get(video, {})
+    raw = raw.get("moves", {}) if isinstance(raw, dict) else {}
+    out: dict[int, str] = {}
+    if isinstance(raw, dict):
+        for key, status in raw.items():
+            try:
+                idx = int(key)
+            except (TypeError, ValueError):
+                continue
+            if status in MOVE_STATUSES:
+                out[idx] = status
+    return out
+
+
+def set_move_status(video: str, index: int, status: str | None) -> dict[int, str]:
+    """Mark a segment learning/practicing/mastered (None clears). Returns the
+    video's updated status map."""
+    progress = load_progress()
+    entry = progress.setdefault(video, {"moves": {}})
+    moves = entry.setdefault("moves", {})
+    if status is None:
+        moves.pop(str(index), None)
+    elif status in MOVE_STATUSES:
+        moves[str(index)] = status
+    else:
+        raise ValueError(f"status must be one of {MOVE_STATUSES} or None")
+    if not moves:
+        progress.pop(video, None)  # nothing left to remember for this dance
+    save_progress(progress)
+    return move_statuses(video)

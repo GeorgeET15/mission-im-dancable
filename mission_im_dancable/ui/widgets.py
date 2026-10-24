@@ -179,6 +179,86 @@ class Stepper:
         surf.blit(vtxt, vtxt.get_rect(center=(val[0] + val[2] // 2, val[1] + val[3] // 2)))
 
 
+class TimelineBar:
+    """Seekable dance timeline with per-segment blocks.
+
+    Segments are colored by state: done (already played), selected (the
+    move being studied), active (under the playhead) and upcoming. The
+    screen maps x positions to seconds via fraction_at(); it never seeks
+    on its own.
+    """
+
+    def __init__(self, rect):
+        self.rect = rect
+
+    def contains(self, pos) -> bool:
+        return self.rect.collidepoint(pos)
+
+    def fraction_at(self, pos) -> float | None:
+        """0-1 position along the bar for a click, or None outside."""
+        if not self.rect.collidepoint(pos):
+            return None
+        return min(max((pos[0] - self.rect.x) / self.rect.w, 0.0), 1.0)
+
+    def draw(
+        self,
+        pygame,
+        surf,
+        font,
+        time_s: float,
+        duration: float,
+        segments=None,
+        state_of=None,
+        interactive: bool = True,
+    ) -> None:
+        """Draw track + segment blocks + playhead.
+
+        segments: list of objects with .start/.end/.name (Move works).
+        state_of(i) -> "done" | "selected" | "active" | "upcoming";
+        segments without a callback all draw as plain blocks.
+        """
+        x, y, w, h = self.rect
+        duration = max(duration, 1e-6)
+        pygame.draw.rect(surf, theme.PANEL, self.rect, border_radius=h // 2)
+        if segments:
+            for i, seg in enumerate(segments):
+                sx = x + int(w * seg.start / duration)
+                sw = max(int(w * (seg.end - seg.start) / duration) - 2, 2)
+                block = pygame.Rect(sx, y + 2, sw, h - 4)
+                state = state_of(i) if state_of else "upcoming"
+                if state == "done":
+                    fill = (90, 60, 140)
+                    edge = theme.PANEL_EDGE
+                elif state == "selected":
+                    fill = (30, 90, 110)
+                    edge = theme.CYAN
+                elif state == "active":
+                    fill = (70, 40, 100)
+                    edge = theme.GOLD
+                else:
+                    fill = (40, 24, 66)
+                    edge = theme.PANEL_EDGE
+                pygame.draw.rect(surf, fill, block, border_radius=4)
+                pygame.draw.rect(surf, edge, block, 1 if state == "upcoming" else 2,
+                                 border_radius=4)
+        else:
+            fill_w = int(w * min(time_s / duration, 1.0))
+            if fill_w:
+                pygame.draw.rect(surf, (70, 40, 100), (x, y + 2, fill_w, h - 4),
+                                 border_radius=h // 2)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, self.rect, 1, border_radius=h // 2)
+        # playhead
+        px = x + int(w * min(max(time_s / duration, 0.0), 1.0))
+        pygame.draw.line(surf, theme.TEXT, (px, y - 4), (px, y + h + 4), 2)
+        pygame.draw.polygon(
+            surf, theme.TEXT,
+            [(px - 5, y - 4), (px + 5, y - 4), (px, y + 2)],
+        )
+        if interactive:
+            label = font.render(f"{time_s:5.1f}s / {duration:5.1f}s", True, theme.DIM)
+            surf.blit(label, label.get_rect(midright=(x + w, y - 10)))
+
+
 class FocusGroup:
     """Keyboard focus navigation over a list of focusable widgets."""
 

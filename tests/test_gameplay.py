@@ -6,11 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import pygame
+
 from mission_im_dancable.config import AppConfig
-from mission_im_dancable.game import GamePhase, GameSession
+from mission_im_dancable.game import GamePhase, PlaySession
 from mission_im_dancable.moves import Move
 from mission_im_dancable.pose import PoseResult
-from mission_im_dancable.practice import PracticeSession
 from mission_im_dancable.reference import ReferenceChoreography
 from mission_im_dancable.ui.screens import PlayScreen, ResultsScreen
 
@@ -67,7 +68,7 @@ class FakeManager:
         self.popped += 1
 
 
-def _ctx(mode="performance", live=True):
+def _ctx(mode="play", live=True):
     moves = [Move("m1", 0.0, 1.0)]
     return SimpleNamespace(
         cfg=AppConfig(window_s=0.15, confidence=0.3),
@@ -94,34 +95,26 @@ def _screen(ctx, cap_ok=True):
     scr.enter()
     scr._ready = True
     scr.cap = FakeCap(ok=cap_ok)
-    scr.session = (
-        GameSession(ctx.moves) if ctx.mode == "performance"
-        else PracticeSession(ctx.choreo, ctx.moves, ctx.cfg.window_s)
-    )
+    scr.session = PlaySession(ctx.moves)
     return scr
 
 
-def test_practice_advances_by_dt():
-    ctx = _ctx(mode="practice")
+def test_play_session_starts_active():
+    ctx = _ctx()
     scr = _screen(ctx)
-    scr.update(ctx, 0.3)
-    assert scr.session.time == pytest.approx(0.3)
-    scr.paused = True
-    scr.update(ctx, 0.5)
-    assert scr.session.time == pytest.approx(0.3)  # frozen while paused
+    assert scr.session.phase == GamePhase.ACTIVE  # no briefing — continuous run
 
 
 def test_performance_evals_commit_with_time(monkeypatch):
     ctx = _ctx()
     scr = _screen(ctx)
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(6):
         wall[0] += 0.2
         scr.update(ctx, 0.2)
     # ~1.2s of play at 0.25s intervals → ~4-5 committed evals, all hits
-    assert scr.session._acc.evaluations >= 4
+    assert scr.session._accs[0].evaluations >= 4
     assert scr.session.combo >= 4
     assert scr.session.total_score > 0
 
@@ -129,14 +122,13 @@ def test_performance_evals_commit_with_time(monkeypatch):
 def test_unreliable_live_pose_breaks_combo(monkeypatch):
     ctx = _ctx(live=False)
     scr = _screen(ctx)
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(4):
         wall[0] += 0.3
         scr.update(ctx, 0.3)
-    assert scr.session._acc.evaluations >= 3
-    assert scr.session._acc.reliable == 0
+    assert scr.session._accs[0].evaluations >= 3
+    assert scr.session._accs[0].reliable == 0
     assert scr.session.combo == 0
     assert scr.session.total_score == 0
 
@@ -144,42 +136,51 @@ def test_unreliable_live_pose_breaks_combo(monkeypatch):
 def test_camera_failure_is_miss_not_crash(monkeypatch):
     ctx = _ctx()
     scr = _screen(ctx, cap_ok=False)
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(3):
         wall[0] += 0.3
         scr.update(ctx, 0.3)
-    assert scr.session._acc.reliable == 0  # all misses, no exception
+    assert scr.session._accs[0].reliable == 0  # all misses, no exception
 
 
 def test_paused_session_commits_nothing(monkeypatch):
     ctx = _ctx()
     scr = _screen(ctx)
-    scr.session.start_move()
     scr.session.toggle_pause()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(4):
         wall[0] += 0.5
         scr.update(ctx, 0.5)
-    assert scr.session._acc.evaluations == 0
+    assert scr.session._accs[0].evaluations == 0
 
 
 def test_complete_moves_to_results(monkeypatch):
     ctx = _ctx()
     scr = _screen(ctx)
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(8):
         wall[0] += 0.3
         scr.update(ctx, 0.3)
-    # move finished → RESULT; player continues (SPACE) → COMPLETE
-    assert scr.session.phase == GamePhase.RESULT
-    scr.session.continue_from_result()
+    # continuous run reaches the end → COMPLETE → results handoff
     assert scr.session.phase == GamePhase.COMPLETE
-    scr.update(ctx, 0.1)  # session→results handoff happens next update
     assert ctx.last_session is scr.session
     assert ctx.last_results == scr.session.results
     assert isinstance(ctx.manager.replaced, ResultsScreen)
+
+
+def test_restart_resets_run(monkeypatch):
+    ctx = _ctx()
+    scr = _screen(ctx)
+    wall = [0.0]
+    monkeypatch.setattr("time.perf_counter", lambda: wall[0])
+    for _ in range(3):
+        wall[0] += 0.3
+        scr.update(ctx, 0.3)
+    assert scr.session.total_score > 0
+    scr.handle_event(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r))
+    assert scr.session.time == 0.0
+    assert scr.session.total_score == 0
+    assert scr.session._accs[0].evaluations == 0

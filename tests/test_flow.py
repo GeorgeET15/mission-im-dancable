@@ -12,7 +12,7 @@ import pygame
 import pytest
 
 from mission_im_dancable.config import AppConfig
-from mission_im_dancable.game import GamePhase, GameSession
+from mission_im_dancable.game import GamePhase, GameSession, PlaySession
 from mission_im_dancable.moves import Move
 from mission_im_dancable.pose import PoseResult
 from mission_im_dancable.reference import ReferenceChoreography
@@ -80,7 +80,7 @@ def _ctx(live=True):
     return SimpleNamespace(
         cfg=AppConfig(window_s=0.15, confidence=0.3),
         window_s=lambda: 0.15,
-        mode="performance",
+        mode="play",
         choreo=_choreo(),
         moves=moves,
         video_path=Path("v.mp4"),
@@ -104,7 +104,7 @@ def _play_screen(ctx, cap_ok=True):
     scr.enter()
     scr._ready = True
     scr.cap = FakeCap(ok=cap_ok)
-    scr.session = GameSession(ctx.moves)
+    scr.session = PlaySession(ctx.moves)
     return scr
 
 
@@ -207,28 +207,27 @@ def test_ready_back_during_opening_releases_late_camera():
 # -- PlayScreen extras --------------------------------------------------------
 
 
-def test_play_autostart_skips_briefing(monkeypatch):
+def test_play_starts_active_after_countdown(monkeypatch):
     ctx = _ctx()
     ctx.auto_start = True
     ctx.cap = FakeCap()
     scr = PlayScreen()
     scr.enter()
     scr.update(ctx, 0.016)
-    assert scr.session.phase == GamePhase.ACTIVE
+    assert scr.session.phase == GamePhase.ACTIVE  # continuous run, no briefing
 
 
 def test_play_no_miss_popups_when_pose_lost(monkeypatch):
     ctx = _ctx(live=False)
     scr = _play_screen(ctx)
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
     for _ in range(4):
         wall[0] += 0.3
         scr.update(ctx, 0.3)
-    assert scr.session._acc.evaluations >= 3   # evals still committed (scoring intact)
-    assert scr.popups == []                    # but no MISS spam
-    assert scr.no_pose_t > 0                   # tracking-loss chip is armed
+    assert scr.session._accs[0].evaluations >= 3  # evals still committed (scoring intact)
+    assert scr.popups == []                        # but no MISS spam
+    assert scr.no_pose_t > 0                       # tracking-loss chip is armed
 
 
 def test_play_camera_error_r_retries_via_ready():
@@ -425,19 +424,16 @@ class FakeMusic:
         self.calls.append(("volume", v))
 
 
-def test_play_music_follows_moves(monkeypatch):
+def test_play_music_follows_run(monkeypatch):
     ctx = _ctx()
     ctx.music = FakeMusic()
     ctx.audio_path = Path("x.wav")
     scr = _play_screen(ctx)
-    scr.update(ctx, 0.016)  # BRIEFING — music loaded, not yet playing
-    assert ("load", True) in ctx.music.calls
-    scr.session.start_move()
     wall = [0.0]
     monkeypatch.setattr("time.perf_counter", lambda: wall[0])
-    wall[0] += 0.1
-    scr.update(ctx, 0.1)
-    assert ("play", 0.0) in ctx.music.calls  # move 1 starts at 0.0
+    scr.update(ctx, 0.016)  # ACTIVE from the first frame — music starts at 0
+    assert ("load", True) in ctx.music.calls
+    assert ("play", 0.0) in ctx.music.calls
     scr.session.toggle_pause()
     scr.update(ctx, 0.1)
     assert ("pause",) in ctx.music.calls
@@ -445,10 +441,13 @@ def test_play_music_follows_moves(monkeypatch):
     wall[0] += 0.1
     scr.update(ctx, 0.1)
     assert ("unpause",) in ctx.music.calls
-    # finish the move → RESULT → music stops
+    # run to the end of the dance → COMPLETE → music stops
     for _ in range(20):
         wall[0] += 0.3
         scr.update(ctx, 0.3)
+        if isinstance(ctx.manager.replaced, ResultsScreen):
+            break
+    assert scr.session.phase == GamePhase.COMPLETE
     assert ("stop",) in ctx.music.calls
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from .moves import Move
+from .moves import Move, move_index_at
 
 
 class GamePhase(enum.Enum):
@@ -109,6 +109,29 @@ class _MoveAccum:
     accuracy_sum: float = 0.0
     points: int = 0
     best_combo: int = 0
+
+
+def _passes(acc: _MoveAccum, config: GameConfig) -> bool:
+    """Shared pass rule: enough reliable evals AND good mean accuracy."""
+    if acc.evaluations == 0:
+        return False
+    mean = acc.accuracy_sum / acc.reliable if acc.reliable else 0.0
+    return (
+        acc.reliable / acc.evaluations >= config.min_reliable_fraction
+        and mean >= config.pass_threshold
+    )
+
+
+def _result_of(move: Move, acc: _MoveAccum, config: GameConfig) -> MoveResult:
+    return MoveResult(
+        name=move.name,
+        passed=_passes(acc, config),
+        evaluations=acc.evaluations,
+        reliable_evaluations=acc.reliable,
+        mean_accuracy=acc.accuracy_sum / acc.reliable if acc.reliable else 0.0,
+        points=acc.points,
+        best_combo=acc.best_combo,
+    )
 
 
 class GameSession:
@@ -278,28 +301,10 @@ class GameSession:
         return self.config.base_points * multiplier
 
     def _would_pass(self) -> bool:
-        evals = self._acc.evaluations
-        if evals == 0:
-            return False
-        mean = self._acc.accuracy_sum / self._acc.reliable if self._acc.reliable else 0.0
-        return (
-            self._acc.reliable / evals >= self.config.min_reliable_fraction
-            and mean >= self.config.pass_threshold
-        )
+        return _passes(self._acc, self.config)
 
     def _finish_move(self) -> None:
-        evals = self._acc.evaluations
-        mean_acc = self._acc.accuracy_sum / self._acc.reliable if self._acc.reliable else 0.0
-        passed = self._would_pass()
-        self.last_result = MoveResult(
-            name=self.move.name,
-            passed=passed,
-            evaluations=evals,
-            reliable_evaluations=self._acc.reliable,
-            mean_accuracy=mean_acc,
-            points=self._acc.points,
-            best_combo=self._acc.best_combo,
-        )
+        self.last_result = _result_of(self.move, self._acc, self.config)
         self.results.append(self.last_result)
         self.phase = GamePhase.RESULT
         self.paused = False
@@ -314,6 +319,151 @@ class GameSession:
             "total_score": self.total_score,
             "best_combo": self.best_combo,
             "moves_passed": sum(1 for r in self.results if r.passed),
+            "moves_total": len(self.moves),
+            "mean_accuracy": acc_sum / total_reliable if total_reliable else 0.0,
+            "evaluations": total_evals,
+            "reliable_fraction": total_reliable / total_evals if total_evals else 0.0,
+        }
+
+
+class PlaySession:
+    """Continuous scored run through the whole dance — the Play Mode session.
+
+    Unlike GameSession (which pauses between moves for briefings and lets a
+    failing move retry), a PlaySession runs the reference from the first
+    move's start to the last move's end without interruption, like a real
+    rhythm game. Scoring uses the same rules: fixed-interval evaluations,
+    100 pts × combo multiplier, misses break combo. Each evaluation is
+    bucketed into the segment owning its timestamp so per-move stats still
+    come out.
+    """
+
+    def __init__(self, moves: list[Move], config: GameConfig | None = None) -> None:
+        if not moves:
+            raise ValueError("PlaySession needs at least one move")
+        self.config = config or GameConfig()
+        self.moves = moves
+        self.start_time = moves[0].start
+        self.end_time = moves[-1].end
+        self.restart()
+
+    def restart(self) -> None:
+        """Reset the whole run back to the dance's start."""
+        self.phase = GamePhase.ACTIVE
+        self.time = self.start_time
+        self.paused = False
+        self.total_score = 0
+        self.combo = 0
+        self.best_combo = 0
+        self.current_accuracy: float | None = None
+        self._accs = [_MoveAccum() for _ in self.moves]
+        self._last_now: float | None = None
+        self._last_frame_id: int | None = None
+        self._last_interval = -1
+        self._eval_elapsed = 0.0
+
+    @property
+    def move_index(self) -> int:
+        return move_index_at(self.moves, self.time)
+
+    @property
+    def move(self) -> Move:
+        return self.moves[self.move_index]
+
+    @property
+    def move_progress(self) -> float:
+        """0-1 progress through the segment under the playhead."""
+        move = self.move
+        if move.duration <= 0:
+            return 1.0
+        return min(max((self.time - move.start) / move.duration, 0.0), 1.0)
+
+    @property
+    def progress(self) -> float:
+        """0-1 progress through the whole run."""
+        span = self.end_time - self.start_time
+        if span <= 0:
+            return 1.0
+        return min(max((self.time - self.start_time) / span, 0.0), 1.0)
+
+    @property
+    def results(self) -> list[MoveResult]:
+        """Per-move stats so far (or final, once COMPLETE)."""
+        return [
+            _result_of(m, acc, self.config)
+            for m, acc in zip(self.moves, self._accs)
+        ]
+
+    def toggle_pause(self) -> None:
+        if self.phase == GamePhase.ACTIVE:
+            self.paused = not self.paused
+
+    def update(
+        self,
+        now: float,
+        accuracy: float | None,
+        reliable: bool,
+        frame_id: int,
+    ) -> EvalEvent | None:
+        """Same contract as GameSession.update — one EvalEvent per committed
+        scoring interval, None otherwise."""
+        if accuracy is not None:
+            self.current_accuracy = accuracy
+
+        if self.phase != GamePhase.ACTIVE or self.paused:
+            self._last_now = None
+            return None
+
+        dt = 0.0 if self._last_now is None else now - self._last_now
+        self._last_now = now
+        self._eval_elapsed += dt
+        self.time = min(self.time + dt, self.end_time)
+        if self.time >= self.end_time:
+            # the run ends exactly at the last segment's end — immediately,
+            # not at the next eval boundary
+            self.phase = GamePhase.COMPLETE
+            self.paused = False
+
+        if frame_id == self._last_frame_id:
+            return None  # same camera frame re-processed — not a new event
+        self._last_frame_id = frame_id
+
+        interval = int(self._eval_elapsed / self.config.eval_interval)
+        if interval == self._last_interval:
+            return None
+        self._last_interval = interval
+
+        hit = reliable and accuracy is not None and accuracy >= self.config.acc_threshold
+        acc = self._accs[self.move_index]
+        acc.evaluations += 1
+        points = 0
+        if hit:
+            acc.reliable += 1
+            acc.accuracy_sum += accuracy
+            points = self._points_for_eval()
+            acc.points += points
+            self.total_score += points
+            self.combo += 1
+            self.best_combo = max(self.best_combo, self.combo)
+            acc.best_combo = max(acc.best_combo, self.combo)
+        else:
+            self.combo = 0
+
+        return EvalEvent(hit=hit, accuracy=accuracy, points=points, combo=self.combo)
+
+    def _points_for_eval(self) -> int:
+        multiplier = min(1 + self.combo // self.config.combo_step, self.config.max_multiplier)
+        return self.config.base_points * multiplier
+
+    def scorecard(self) -> dict:
+        results = self.results
+        total_evals = sum(r.evaluations for r in results)
+        total_reliable = sum(r.reliable_evaluations for r in results)
+        acc_sum = sum(r.mean_accuracy * r.reliable_evaluations for r in results)
+        return {
+            "total_score": self.total_score,
+            "best_combo": self.best_combo,
+            "moves_passed": sum(1 for r in results if r.passed),
             "moves_total": len(self.moves),
             "mean_accuracy": acc_sum / total_reliable if total_reliable else 0.0,
             "evaluations": total_evals,

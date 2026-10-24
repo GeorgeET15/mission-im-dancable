@@ -15,13 +15,13 @@ from ..audio import ensure_audio_wav
 from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
-from ..game import GamePhase, GameSession, grade_for, judge, Judgement
+from ..dance import build_dance
+from ..game import GamePhase, GameSession, PlaySession, grade_for, judge, Judgement
 from ..geometry import SKELETON_EDGES
-from ..moves import MovesFileError, default_moves, load_moves
+from ..moves import default_moves, load_dance_file
 from ..persist import add_score, load_scores, load_settings, save_settings
 from ..playback import PlaybackClock
 from ..pose import PoseTracker
-from ..practice import PracticeSession
 from ..reference import (
     ReferenceChoreography,
     ReferenceVideoError,
@@ -43,7 +43,7 @@ from ..scoring import (
 )
 from . import theme
 from .nav import Navigator
-from .widgets import Button, FocusGroup, ProgressBar, Stepper, TextField, Toggle
+from .widgets import Button, FocusGroup, ProgressBar, Stepper, TextField, TimelineBar, Toggle
 
 W, H = 1280, 720
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
@@ -59,18 +59,19 @@ class AppContext:
         self.manager = manager
         self.settings = load_settings()
         self.mirror = bool(self.settings.get("mirror", cfg.mirror))
-        self.mode = "performance"  # or "practice"
+        self.mode = "play"  # "play" (scored) or "learn" (free study)
         self.tracker: PoseTracker | None = None
         self.device = "cpu"
         self.video_path: Path | None = cfg.source
         self.moves_path: Path | None = cfg.moves_path
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
+        self.dance = None  # dance.Dance — metadata for the selected video
         self.beats = None  # BeatGrid set after analyze; None = no beat sync
         # Shared webcam capture: ReadyScreen opens it in the background,
         # PlayScreen consumes it, menus release it. One open per session.
         self.cap = None
-        self.auto_start = False  # countdown finished → skip first BRIEFING
+        self.auto_start = False  # ReadyScreen's countdown finished → play now
         self.fullscreen = bool(self.settings.get("fullscreen", False))
         self.music = None        # audio.Music, created by the app loop
         self.audio_path: Path | None = None  # cached WAV of the picked video
@@ -265,6 +266,27 @@ def _pick_hint(analysis, live, reference):
     return None
 
 
+def eval_against_reference(ctx, choreo, t: float, live_keypoints):
+    """Score one live pose against the reference window around time t.
+
+    Returns (accuracy, reliable, hint, matched_ref_row). Both Learn and Play
+    screens call this so the comparison rule is identical in the two modes.
+    """
+    rows = choreo.keypoints[window_indices(choreo, t, ctx.window_s())]
+    if ctx.mirror and rows.size:
+        rows = np.stack([mirror_keypoints(r, choreo.width) for r in rows])
+    if live_keypoints is None or not rows.size:
+        return None, False, None, None
+    best = best_window_score(live_keypoints, rows, ctx.cfg.confidence)
+    if best is None:
+        return None, False, None, None
+    analysis = analyze_pose(live_keypoints, rows[best[1]], ctx.cfg.confidence)
+    if analysis is None:
+        return None, False, None, None
+    hint = _pick_hint(analysis, live_keypoints, rows[best[1]])
+    return analysis.pose_score.score, True, hint, rows[best[1]]
+
+
 def _open_camera_ctx(ctx) -> None:
     """Open the shared camera into ctx.cap (runs on a worker thread)."""
     cam_cfg = AppConfig(
@@ -289,7 +311,7 @@ def _best_score_for(video_name: str, scores: list[dict]) -> dict | None:
 
 
 class HomeScreen(Screen):
-    LABELS = [("LET'S DANCE", "dance", True), ("PRACTICE", "practice", False),
+    LABELS = [("LEARN", "learn", True), ("PLAY", "play", True),
               ("HIGH SCORES", "scores", False), ("SETTINGS", "settings", False),
               ("QUIT", "quit", False)]
 
@@ -304,11 +326,8 @@ class HomeScreen(Screen):
         self._need_close = True  # release a leftover webcam next update
 
     def _activate(self, ctx, action: str) -> None:
-        if action == "dance":
-            ctx.mode = "performance"
-            ctx.manager.push(SelectScreen())
-        elif action == "practice":
-            ctx.mode = "practice"
+        if action in ("learn", "play"):
+            ctx.mode = action
             ctx.manager.push(SelectScreen())
         elif action == "scores":
             ctx.manager.push(ScoresScreen())
@@ -402,8 +421,7 @@ class SelectScreen(Screen):
         self.field = TextField(pygame.Rect(60, 190, 760, 44), placeholder="type a video path, or click a dance below")
         self.btn_analyze = Button(pygame.Rect(840, 188, 190, 48), "ANALYZE", "analyze", True)
         self.btn_start = Button(pygame.Rect(1050, 188, 190, 48), "START DANCING", "start", True, enabled=False)
-        self.tgl_mode = Toggle(pygame.Rect(60, 260, 460, 30), "performance mode (scored run)", "mode", True)
-        self.tgl_mirror = Toggle(pygame.Rect(60, 298, 460, 30), "mirror choreography", "mirror", False)
+        self.tgl_mirror = Toggle(pygame.Rect(60, 260, 460, 30), "mirror choreography", "mirror", False)
         self.btn_back = Button(pygame.Rect(60, 645, 160, 48), "BACK", "back")
         self.btn_browse = Button(pygame.Rect(230, 645, 160, 48), "BROWSE…", "browse")
         self.btn_watch = Button(pygame.Rect(400, 645, 160, 48), "WATCH", "watch", enabled=False)
@@ -414,6 +432,7 @@ class SelectScreen(Screen):
         self.progress = -1.0
         self.choreo = None
         self.moves = None
+        self.dance = None
         self._thread = None
         self.error = ""
         self.bar = ProgressBar(pygame.Rect(60, 610, 700, 14), color=theme.PINK)
@@ -427,8 +446,8 @@ class SelectScreen(Screen):
         if not self._synced:
             self._synced = True
             close_camera(ctx)  # landing here ends any gameplay session
-            self.tgl_mode.value = ctx.mode == "performance"
             self.tgl_mirror.value = ctx.mirror
+            self.btn_start.label = "START LEARNING" if ctx.mode == "learn" else "START DANCING"
             if ctx.video_path and not self.field.text:
                 self.field.text = str(ctx.video_path)
             elif not self.field.text and ctx.settings.get("last_video"):
@@ -437,11 +456,11 @@ class SelectScreen(Screen):
             vids = _detect_videos(Path.cwd())[:MAX_DETECTED]
             self.cards = [self._make_card(v, i) for i, v in enumerate(vids)]
             if ctx.choreo is not None and ctx.video_path and Path(self.field.text) == ctx.video_path:
-                self.choreo, self.moves = ctx.choreo, ctx.moves
+                self.choreo, self.moves, self.dance = ctx.choreo, ctx.moves, ctx.dance
                 self.btn_start.enabled = True
                 self.btn_watch.enabled = True
                 self._fill_info(ctx.video_path)
-                self._set_status("ready — START DANCING or WATCH first", theme.GOOD)
+                self._set_status("ready — press START or WATCH first", theme.GOOD)
 
     def _make_card(self, path: Path, i: int) -> dict:
         probe = _probe_video(path)
@@ -460,8 +479,9 @@ class SelectScreen(Screen):
         probe = _probe_video(path)
         if probe and self.choreo:
             dur, w, h = probe
+            diff = f" · {self.dance.difficulty}" if self.dance and self.dance.difficulty else ""
             self.info = (
-                f"{path.name} · {dur:.1f}s · {w}x{h} · "
+                f"{path.name} · {dur:.1f}s · {w}x{h}{diff} · "
                 f"{self.choreo.detected_count()}/{self.choreo.num_samples} poses detected · "
                 f"{len(self.moves) if self.moves else 0} move(s)"
             )
@@ -485,6 +505,7 @@ class SelectScreen(Screen):
         ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
         self.choreo = None
         self.moves = None
+        self.dance = None
         self.info = ""
         self.btn_start.enabled = False
         self.btn_watch.enabled = False
@@ -507,10 +528,10 @@ class SelectScreen(Screen):
                     ctx.cfg.confidence, model_name=ctx.cfg.model_path.name,
                     on_progress=lambda d, t: setattr(self, "progress", d / max(t, 1)),
                 )
-                moves = (
-                    load_moves(ctx.moves_path, choreo.duration)
+                moves, meta = (
+                    load_dance_file(ctx.moves_path, choreo.duration)
                     if ctx.moves_path
-                    else default_moves(choreo.duration)
+                    else (default_moves(choreo.duration), {})
                 )
             except Exception as exc:  # surface to UI thread
                 self.error = str(exc)
@@ -518,6 +539,7 @@ class SelectScreen(Screen):
             ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
             ctx.audio_path = ensure_audio_wav(path, ctx.cfg.cache_dir)
             self.choreo, self.moves = choreo, moves
+            self.dance = build_dance(path, choreo, moves, meta)
 
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
@@ -532,13 +554,17 @@ class SelectScreen(Screen):
     def _start(self, ctx) -> None:
         if self.choreo is None or self.moves is None:
             return
-        ctx.choreo, ctx.moves = self.choreo, self.moves
-        ctx.mode = "performance" if self.tgl_mode.value else "practice"
+        ctx.choreo, ctx.moves, ctx.dance = self.choreo, self.moves, self.dance
         ctx.mirror = self.tgl_mirror.value
         ctx.settings["last_video"] = str(ctx.video_path)
         ctx.settings["mirror"] = ctx.mirror
         save_settings(ctx.settings)
-        ctx.manager.push(ReadyScreen())
+        if ctx.mode == "learn":
+            from .learn import LearnScreen
+
+            ctx.manager.push(LearnScreen())
+        else:
+            ctx.manager.push(ReadyScreen())
 
     def _back(self, ctx) -> None:
         if ctx.manager.depth > 1:
@@ -551,7 +577,7 @@ class SelectScreen(Screen):
     def handle_event(self, ctx, ev) -> None:
         self._ctx = ctx
         widgets = [self.field, self.btn_analyze, self.btn_start, self.btn_back,
-                   self.btn_browse, self.btn_watch, self.tgl_mode, self.tgl_mirror]
+                   self.btn_browse, self.btn_watch, self.tgl_mirror]
         if ev.type == pygame.MOUSEMOTION:
             for wdgt in widgets:
                 if hasattr(wdgt, "hovered"):
@@ -593,13 +619,9 @@ class SelectScreen(Screen):
         elif action == "browse":
             self._browse(ctx)
         elif action == "watch":
-            ctx.choreo, ctx.moves = self.choreo, self.moves
-            ctx.mode = "performance" if self.tgl_mode.value else "practice"
+            ctx.choreo, ctx.moves, ctx.dance = self.choreo, self.moves, self.dance
             ctx.mirror = self.tgl_mirror.value
             ctx.manager.push(WatchScreen())
-        elif action == "mode":
-            self.tgl_mode.value = not self.tgl_mode.value
-            ctx.mode = "performance" if self.tgl_mode.value else "practice"
         elif action == "mirror":
             self.tgl_mirror.value = not self.tgl_mirror.value
             ctx.mirror = self.tgl_mirror.value
@@ -652,14 +674,13 @@ class SelectScreen(Screen):
         _title(pygame, ctx, surf, ctx.t, y=48)
         f_sm, f_med = ctx.fonts["sm"], ctx.fonts["med"]
         head = f_med.render(
-            "CHOOSE YOUR DANCE" + (" — PERFORMANCE" if self.tgl_mode.value else " — PRACTICE"),
+            "CHOOSE YOUR DANCE" + (" — LEARN" if ctx.mode == "learn" else " — PLAY"),
             True, theme.CYAN,
         )
         surf.blit(head, (60, 150))
         self.field.draw(pygame, surf, f_sm, ctx.t)
         self.btn_analyze.draw(pygame, surf, f_med, ctx.t)
         self.btn_start.draw(pygame, surf, f_med, ctx.t)
-        self.tgl_mode.draw(pygame, surf, f_sm)
         self.tgl_mirror.draw(pygame, surf, f_sm)
         surf.blit(f_sm.render("detected videos — click to analyze:", True, theme.DIM), (60, 332))
         for c in self.cards:
@@ -1052,7 +1073,12 @@ POPUP_TTL = 0.9
 
 
 class PlayScreen(Screen):
-    """Gameplay: reference skeleton vs live camera + score/combo/judgements."""
+    """Play Mode: continuous scored run through the whole dance.
+
+    The reference plays start-to-finish while the session evaluates the
+    player's pose at fixed intervals. No seeking and no mid-run retries —
+    the only controls are pause/resume, restart, mirror, and quit.
+    """
 
     def enter(self) -> None:
         self._ready = False
@@ -1064,16 +1090,14 @@ class PlayScreen(Screen):
         self.session = None
         self.frame_id = 0
         self.popups: list[list] = []
-        self.paused = False
         self.flash = 0.0
         self.results_done = False
         self.no_pose_t = 0.0
         self.smoother = ScoreSmoother()
         self.corrections = CorrectionTracker()
-        self._music_phase = None   # last session phase the music state matched
+        self._music_started = False  # soundtrack anchored at run start
         self._music_paused = False
-        self._prev_practice_move = -1
-        self._prev_practice_t = 0.0
+        self._music_stopped = False
 
     def _ensure(self, ctx) -> None:
         """One-time init needing ctx (camera + session); safe to call often."""
@@ -1086,16 +1110,8 @@ class PlayScreen(Screen):
             except CameraError as exc:
                 self.cam_err = str(exc)
         self.cap = ctx.cap
-        if ctx.mode == "performance":
-            self.session = GameSession(ctx.moves)
-        else:
-            self.session = PracticeSession(ctx.choreo, ctx.moves, ctx.window_s())
-        if (
-            ctx.auto_start
-            and isinstance(self.session, GameSession)
-            and self.session.phase == GamePhase.BRIEFING
-        ):
-            self.session.start_move()
+        if self.session is None:
+            self.session = PlaySession(ctx.moves)
         ctx.auto_start = False
 
     def exit(self) -> None:
@@ -1106,63 +1122,43 @@ class PlayScreen(Screen):
     # -- soundtrack ---------------------------------------------------------
 
     def _update_music(self, ctx) -> None:
-        """Keep the video's audio aligned with the session clock.
+        """Keep the soundtrack aligned with the continuous session clock.
 
-        Performance: plays [move.start → move end) per move; stops in GRACE
-        (the reference freezes at move.end) and between moves. Pauses and
-        re-anchors if wall-clock drift exceeds 0.25 s.
-        Practice: loops each move's audio segment with the session.
+        Starts at the first move's start, pauses/unpauses with the session,
+        re-anchors when wall-clock drift exceeds 0.25 s, and stops when the
+        run completes.
         """
         music = getattr(ctx, "music", None)
-        if music is None:
+        s = self.session
+        if music is None or s is None:
+            return
+        if s.phase == GamePhase.COMPLETE:
+            if not self._music_stopped:
+                music.stop()
+                self._music_stopped = True
             return
         if not music.loaded:
             if not music.load(getattr(ctx, "audio_path", None)):
                 return  # no audio track for this video — silent run
-        if isinstance(self.session, GameSession):
-            phase, paused = self.session.phase, self.session.paused
-            if phase != self._music_phase:
-                if phase == GamePhase.ACTIVE:
-                    music.play_at(self.session.move.start)
-                elif self._music_phase == GamePhase.ACTIVE:
-                    music.stop()
-                self._music_phase = phase
-            if paused != self._music_paused:
-                (music.pause if paused else music.unpause)()
-                self._music_paused = paused
-            if phase == GamePhase.ACTIVE and not paused:
-                pos = music.position()
-                if pos is not None and abs(pos - self.session.time) > 0.25:
-                    music.play_at(self.session.time)
-        else:
-            s = self.session
-            move_changed = s.move_index != self._prev_practice_move
-            wrapped = s.time < self._prev_practice_t - 1e-3
-            if move_changed or wrapped or self._music_phase is None:
-                music.play_at(s.move.start)
-                self._prev_practice_move = s.move_index
-                self._music_phase = True
-            self._prev_practice_t = s.time
-            if self.paused != self._music_paused:
-                (music.pause if self.paused else music.unpause)()
-                self._music_paused = self.paused
+        if not self._music_started:
+            music.play_at(s.start_time)
+            self._music_started = True
+            self._music_paused = False
+        if s.paused != self._music_paused:
+            (music.pause if s.paused else music.unpause)()
+            self._music_paused = s.paused
+        if not s.paused:
+            pos = music.position()
+            if pos is not None and abs(pos - s.time) > 0.25:
+                music.play_at(s.time)
 
     def _eval_feed(self, ctx) -> tuple[float | None, bool, np.ndarray | None, object]:
         """Compute accuracy + reliability + display hint against the window."""
-        rows = ctx.choreo.keypoints[window_indices(ctx.choreo, self.session.time, ctx.window_s())]
-        if ctx.mirror and rows.size:
-            rows = np.stack([mirror_keypoints(r, ctx.choreo.width) for r in rows])
-        accuracy, reliable, hint, ref_row = None, False, None, None
-        if self.live is not None and rows.size:
-            best = best_window_score(self.live.keypoints, rows, ctx.cfg.confidence)
-            if best is not None:
-                analysis = analyze_pose(self.live.keypoints, rows[best[1]], ctx.cfg.confidence)
-                accuracy = self.smoother.update(analysis.pose_score.score)
-                reliable = True
-                hint = _pick_hint(analysis, self.live.keypoints, rows[best[1]])
-                ref_row = rows[best[1]]
-        else:
-            self.smoother.update(None)
+        live_kpts = self.live.keypoints if self.live is not None else None
+        raw, reliable, hint, ref_row = eval_against_reference(
+            ctx, ctx.choreo, self.session.time, live_kpts
+        )
+        accuracy = self.smoother.update(raw) if reliable else self.smoother.update(None)
         return accuracy, reliable, hint, ref_row
 
     def _on_eval(self, ctx, ev) -> None:
@@ -1191,11 +1187,8 @@ class PlayScreen(Screen):
         if ev.type != pygame.KEYDOWN:
             return
         k = ev.key
-        if k in (pygame.K_ESCAPE, pygame.K_p):
-            if isinstance(self.session, GameSession):
-                self.session.toggle_pause()
-            else:
-                self.paused = not self.paused
+        if k in (pygame.K_ESCAPE, pygame.K_p, pygame.K_SPACE):
+            self.session.toggle_pause()
         elif k == pygame.K_q:
             music = getattr(ctx, "music", None)
             if music is not None:
@@ -1204,20 +1197,10 @@ class PlayScreen(Screen):
         elif k == pygame.K_r and self.cam_err:
             # dead camera → back through the readiness flow to reopen it
             ctx.manager.swap(ReadyScreen())
-        elif k in (pygame.K_SPACE, pygame.K_RETURN):
-            if isinstance(self.session, GameSession):
-                if self.session.phase == GamePhase.BRIEFING:
-                    self.session.start_move()
-                elif self.session.phase == GamePhase.RESULT:
-                    self.session.continue_from_result()
         elif k == pygame.K_r:
-            if isinstance(self.session, GameSession):
-                if self.session.phase == GamePhase.RESULT:
-                    self.session.retry_move()
-            else:
-                self.session.set_move(0)
-        elif k == pygame.K_n and isinstance(self.session, PracticeSession):
-            self.session.set_move(self.session.move_index + 1)
+            self.session.restart()  # restart the run from the top
+            self._music_started = False
+            self._music_stopped = False
         elif k == pygame.K_m:
             ctx.mirror = not ctx.mirror
 
@@ -1235,26 +1218,16 @@ class PlayScreen(Screen):
             self.no_pose_t = 0.0
         self.frame_id += 1
         accuracy, reliable, hint, _ = self._eval_feed(ctx)
-        if isinstance(self.session, GameSession):
-            ev = self.session.update(time.perf_counter(), accuracy, reliable, self.frame_id)
-            if not self.session.paused:
-                self._on_eval(ctx, ev)
-        elif not self.paused:
-            self.session.advance(dt)
+        ev = self.session.update(time.perf_counter(), accuracy, reliable, self.frame_id)
+        if not self.session.paused:
+            self._on_eval(ctx, ev)
         self.hint = self.corrections.update(hint)
         self.flash = max(0.0, self.flash - dt * 2)
         self._update_music(ctx)
-        if (
-            isinstance(self.session, GameSession)
-            and self.session.phase == GamePhase.COMPLETE
-            and not self.results_done
-        ):
+        if self.session.phase == GamePhase.COMPLETE and not self.results_done:
             self.results_done = True
             ctx.last_session = self.session
             ctx.last_results = self.session.results
-            music = getattr(ctx, "music", None)
-            if music is not None:
-                music.stop()
             ctx.manager.replace(ResultsScreen())
 
     def _panels(self, ctx, surf) -> tuple:
@@ -1288,15 +1261,14 @@ class PlayScreen(Screen):
         # draw can run before this screen's first update() — init lazily.
         self._ensure(ctx)
         f_sm, f_med, f_big = ctx.fonts["sm"], ctx.fonts["med"], ctx.fonts["big"]
-        perf = isinstance(self.session, GameSession)
-        surf.blit(f_med.render(f"OBJECTIVE {self.session.move_index + 1}/{len(self.session.moves)}: {self.session.move.name}", True, theme.PINK), (30, 20))
-        if perf:
-            surf.blit(f_med.render(f"SCORE {self.session.total_score}", True, theme.GOLD), (900, 20))
-            mult = min(1 + self.session.combo // self.session.config.combo_step, self.session.config.max_multiplier)
-            surf.blit(f_med.render(f"COMBO x{mult} ({self.session.combo})", True, theme.CYAN), (900, 52))
+        s = self.session
+        surf.blit(f_med.render(f"MOVE {s.move_index + 1}/{len(s.moves)}: {s.move.name}", True, theme.PINK), (30, 20))
+        surf.blit(f_med.render(f"SCORE {s.total_score}", True, theme.GOLD), (900, 20))
+        mult = min(1 + s.combo // s.config.combo_step, s.config.max_multiplier)
+        surf.blit(f_med.render(f"COMBO x{mult} ({s.combo})", True, theme.CYAN), (900, 52))
         ref_rect, cam_rect = self._panels(ctx, surf)
         # beat-synced pulse: border glow on the reference panel + popup kick
-        pulse = ctx.beats.pulse(self.session.time) if ctx.beats is not None else 0.0
+        pulse = ctx.beats.pulse(s.time) if ctx.beats is not None else 0.0
         if pulse > 0.05:
             glow = tuple(int(a + (b - a) * pulse) for a, b in zip(theme.PANEL_EDGE, theme.CYAN))
             pygame.draw.rect(surf, glow, ref_rect, 1 + int(3 * pulse), border_radius=4)
@@ -1305,27 +1277,31 @@ class PlayScreen(Screen):
             _chip(pygame, ctx, surf, "POSE LOST — STEP INTO FRAME",
                   (cam_rect[0] + cam_rect[2] // 2, cam_rect[1] + 28), theme.GOLD)
         # bottom HUD
-        acc = getattr(self.session, "current_accuracy", None) or 0.0
+        acc = s.current_accuracy or 0.0
         surf.blit(f_sm.render(f"ACCURACY {acc * 100:3.0f}%", True, theme.TEXT), (30, 600))
         pygame.draw.rect(surf, theme.PANEL_EDGE, (200, 602, 300, 14), border_radius=7)
         pygame.draw.rect(surf, theme.CYAN if acc >= 0.6 else theme.MISS, (200, 602, int(300 * min(acc, 1.0)), 14), border_radius=7)
         tick_x = 200 + int(300 * 0.6)  # pass threshold marker
         pygame.draw.line(surf, theme.GOLD, (tick_x, 599), (tick_x, 619), 2)
-        prog = self.session.move_progress if perf else ((self.session.time - self.session.move.start) / max(self.session.move.duration, 1e-6))
-        move = self.session.move
-        surf.blit(f_sm.render(f"MOVE {min(prog,1) * 100:3.0f}%  {self.session.time - move.start:4.1f}/{move.duration:.1f}s", True, theme.TEXT), (540, 600))
+        move = s.move
+        surf.blit(f_sm.render(f"{move.name[:22]:<22} {s.time - move.start:4.1f}/{move.duration:.1f}s", True, theme.TEXT), (540, 600))
         pygame.draw.rect(surf, theme.PANEL_EDGE, (780, 602, 300, 14), border_radius=7)
-        pygame.draw.rect(surf, theme.PINK, (780, 602, int(300 * min(prog, 1.0)), 14), border_radius=7)
-        # whole-routine progress across the footer
-        total = max(ctx.moves[-1].end if ctx.moves else move.end, 1e-6)
-        pygame.draw.rect(surf, theme.PANEL_EDGE, (30, 668, 1220, 6), border_radius=3)
-        pygame.draw.rect(surf, theme.VIOLET, (30, 668, int(1220 * min(self.session.time / total, 1.0)), 6), border_radius=3)
+        pygame.draw.rect(surf, theme.PINK, (780, 602, int(300 * min(s.move_progress, 1.0)), 14), border_radius=7)
+        # whole-run progress strip with segment ticks — display only, no seek
+        strip = pygame.Rect(30, 666, 1220, 8)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, strip, border_radius=4)
+        total = max(s.end_time - s.start_time, 1e-6)
+        fill = int(strip.w * min(s.progress, 1.0))
+        if fill:
+            pygame.draw.rect(surf, theme.VIOLET, (strip.x, strip.y, fill, strip.h), border_radius=4)
+        for m in s.moves[1:]:
+            tx = strip.x + int(strip.w * (m.start - s.start_time) / total)
+            pygame.draw.line(surf, theme.TEXT, (tx, strip.y - 2), (tx, strip.y + strip.h + 2), 1)
         _dim_strip(pygame, surf, (24, 628, 700, 40))
-        hint_txt = self.hint or ("match the pose" if perf else "practice — copy the dancer")
+        hint_txt = self.hint or "match the pose"
         surf.blit(f_med.render(hint_txt, True, theme.MISS if self.hint else theme.DIM), (30, 636))
         _dim_strip(pygame, surf, (24, 686, 560, 30))
-        keys = "P pause · M mirror · Q back" if not perf else "SPACE confirm · R retry · P pause · M mirror · Q back"
-        surf.blit(f_sm.render(keys, True, theme.DIM), (30, 693))
+        surf.blit(f_sm.render("R restart · P pause · M mirror · Q back", True, theme.DIM), (30, 693))
         # judgement popups
         for text, color, born in self.popups:
             age = ctx.t - born
@@ -1337,30 +1313,13 @@ class PlayScreen(Screen):
             img.set_alpha(int(255 * max(0.0, 1.0 - age / POPUP_TTL)))
             surf.blit(img, img.get_rect(center=(W // 2, 90)))
         self.popups = [p for p in self.popups if ctx.t - p[2] < POPUP_TTL]
-        if perf and self.session.phase == GamePhase.GRACE:
-            warn = theme.glow_text(
-                pygame, f_big,
-                f"COMPLETE THE MOVE — {self.session.grace_remaining:.0f}s",
-                theme.MISS,
-            )
-            surf.blit(warn, warn.get_rect(center=(W // 2, 170)))
         if self.flash > 0:
             veil = pygame.Surface((W, H), pygame.SRCALPHA)
             veil.fill((*theme.CYAN, int(60 * self.flash)))
             surf.blit(veil, (0, 0))
         ctx.particles.draw(pygame, surf)
-        # phase overlays
-        if perf and self.session.phase == GamePhase.BRIEFING:
-            self._overlay(ctx, surf, f"MOVE {self.session.move_index + 1}", self.session.move.name, "press SPACE to dance", theme.CYAN)
-        elif perf and self.session.phase == GamePhase.RESULT and self.session.last_result:
-            r = self.session.last_result
-            self._overlay(ctx, surf, "MOVE PASSED!" if r.passed else "MOVE FAILED",
-                          f"accuracy {r.mean_accuracy * 100:.0f}% · +{r.points} pts · best combo {r.best_combo}",
-                          "SPACE next move" if r.passed else "R retry move",
-                          theme.GOOD if r.passed else theme.MISS)
-        paused = self.session.paused if perf else self.paused
-        if paused:
-            self._overlay(ctx, surf, "PAUSED", "", "P resume · Q quit to menu", theme.GOLD)
+        if s.paused:
+            self._overlay(ctx, surf, "PAUSED", "", "P resume · R restart · Q quit to menu", theme.GOLD)
         if self.cam_err and self.cap is None:
             self._overlay(ctx, surf, "CAMERA PROBLEM", self.cam_err[:60],
                           "R reopen camera · Q back to dances", theme.MISS)
@@ -1480,8 +1439,9 @@ class ResultsScreen(Screen):
         self.born = time.perf_counter()
 
     def _sync(self, ctx) -> None:
-        if self.card is None and isinstance(getattr(ctx, "last_session", None), GameSession):
-            self.card = ctx.last_session.scorecard()
+        session = getattr(ctx, "last_session", None)
+        if self.card is None and isinstance(session, (GameSession, PlaySession)):
+            self.card = session.scorecard()
         if self.card is None:
             return
         if not self._saved:
@@ -1569,8 +1529,10 @@ class ResultsScreen(Screen):
         self._stat(ctx, surf, x0 + bw + gap, 300, bw, "BEST COMBO", str(card['best_combo']), theme.PINK)
         self._stat(ctx, surf, x0 + 2 * (bw + gap), 300, bw, "MOVES PASSED",
                    f"{card['moves_passed']}/{card['moves_total']}", theme.GOOD)
-        if ctx.video_path:
-            name = ctx.fonts["sm"].render(f"dance: {ctx.video_path.name}", True, theme.DIM)
+        dance = getattr(ctx, "dance", None)
+        if dance is not None or ctx.video_path:
+            title = dance.title if dance is not None else ctx.video_path.name
+            name = ctx.fonts["sm"].render(f"dance: {title}", True, theme.DIM)
             surf.blit(name, name.get_rect(center=(W // 2, 396)))
         y = 425
         for r in getattr(ctx, "last_results", [])[:6]:
