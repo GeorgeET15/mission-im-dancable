@@ -142,7 +142,8 @@ class GameSession:
         self._last_now: float | None = None
         self._last_frame_id: int | None = None
         self._last_interval = -1
-        self._grace_deadline = 0.0
+        self._eval_elapsed = 0.0
+        self._grace_elapsed = 0.0
 
     @property
     def move(self) -> Move:
@@ -160,7 +161,7 @@ class GameSession:
         """Seconds left in the completion window; 0 outside GRACE."""
         if self.phase != GamePhase.GRACE:
             return 0.0
-        return max(0.0, self._grace_deadline - self.time)
+        return max(0.0, self.config.grace_seconds - self._grace_elapsed)
 
     # -- state transitions -------------------------------------------------
 
@@ -173,6 +174,8 @@ class GameSession:
         self._acc = _MoveAccum()
         self._last_interval = -1
         self._last_now = None
+        self._eval_elapsed = 0.0
+        self._grace_elapsed = 0.0
 
     def continue_from_result(self) -> None:
         """RESULT → next BRIEFING or COMPLETE. Ignored if the move failed."""
@@ -194,6 +197,8 @@ class GameSession:
             self.time = self.move.start
             self._acc = _MoveAccum()
             self._last_interval = -1
+            self._eval_elapsed = 0.0
+            self._grace_elapsed = 0.0
 
     def toggle_pause(self) -> None:
         if self.phase in (GamePhase.ACTIVE, GamePhase.GRACE):
@@ -221,16 +226,19 @@ class GameSession:
             self._last_now = None
             return None
 
-        if self._last_now is not None:
-            self.time += now - self._last_now
+        dt = 0.0 if self._last_now is None else now - self._last_now
         self._last_now = now
+        self._eval_elapsed += dt
+        if self.phase == GamePhase.ACTIVE:
+            self.time += dt
+        else:  # GRACE: reference freezes on the move's last pose (typing-game style)
+            self._grace_elapsed += dt
 
         if frame_id == self._last_frame_id:
             return None  # same camera frame re-processed — not a new event
         self._last_frame_id = frame_id
 
-        elapsed = self.time - self.move.start
-        interval = int(elapsed / self.config.eval_interval)
+        interval = int(self._eval_elapsed / self.config.eval_interval)
         if interval == self._last_interval:
             return None
         self._last_interval = interval
@@ -255,9 +263,10 @@ class GameSession:
                 self._finish_move()
             else:  # failing at move end → last-chance window, not instant fail
                 self.phase = GamePhase.GRACE
-                self._grace_deadline = self.time + self.config.grace_seconds
+                self._grace_elapsed = 0.0
+                self.time = self.move.end  # hold the final pose, don't play ahead
         elif self.phase == GamePhase.GRACE:
-            if self._would_pass() or self.time >= self._grace_deadline:
+            if self._would_pass() or self._grace_elapsed >= self.config.grace_seconds:
                 self._finish_move()
 
         return EvalEvent(hit=hit, accuracy=accuracy, points=points, combo=self.combo)

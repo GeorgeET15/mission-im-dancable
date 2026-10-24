@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T03:55:00+05:30 — Freeze reference during the completion window
+
+- Changed: During `GamePhase.GRACE` `session.time` now clamps at `move.end` — the reference skeleton holds the move's final pose instead of playing ahead into the next move (typing-game behavior). Scoring intervals run on a separate `_eval_elapsed` clock so evaluations still commit during the window; `_grace_elapsed` tracks the countdown.
+- Why: User feedback — the dancer kept stepping into the next move during grace, which made the window meaningless.
+- Validation: `pytest tests/` → 122 passed; new assertions verify `session.time == move.end` throughout the window.
+- Limitations: none beyond the existing grace scope (performance mode only).
+
 ## 2026-10-25T03:40:00+05:30 — Full-dance WATCH mode + 5s move-completion window
 
 - Changed: New `WatchScreen` (pygame) plays the whole choreography skeleton end-to-end via `PlaybackClock` — SPACE pause, arrows seek, R restart, M mirror, ENTER starts dancing; `WATCH` button on the select screen enabled after analyze. `GamePhase.GRACE` + `GameConfig.grace_seconds` (default 5 s): when a move ends while failing, the session enters a countdown window instead of instant MOVE FAILED — recovery during the window passes early; `grace_seconds=0` restores old behavior. Play screen shows a "COMPLETE THE MOVE — Xs" banner during the window.

@@ -35,7 +35,9 @@ def test_failing_move_enters_grace_then_expires():
         s.update(now, None, False, fid)
     assert s.phase == GamePhase.GRACE
     assert s.grace_remaining > 4.0
+    assert s.time == s.move.end  # reference frozen on the last pose
     while s.phase == GamePhase.GRACE:  # keep failing → window expires
+        assert s.time == s.move.end
         now += 0.25
         fid += 1
         s.update(now, None, False, fid)
