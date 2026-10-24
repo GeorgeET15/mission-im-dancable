@@ -103,18 +103,11 @@ Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video du
 
 The pygame-ce dance-arcade UI: neon-purple theme with spotlights, equalizer, and a dance floor. `python -m mission_im_dancable --game` opens the full flow:
 
-- **Screens:** HOME → CHOOSE YOUR DANCE (type a path or pick a detected video, ANALYZE extracts choreography in the background, `<stem>.moves.json` auto-detected) → gameplay (reference Amy or skeleton vs live skeleton, PERFECT/GREAT/MISS popups, combo milestones, particles) → RESULTS (grade S/A/B/C/F, per-move stats, retry / another dance / home). HIGH SCORES persists top runs locally; SETTINGS stores camera index, mirror default, and Amy toggle in the user config dir.
+- **Screens:** HOME → CHOOSE YOUR DANCE (type a path or pick a detected video, ANALYZE extracts choreography in the background, `<stem>.moves.json` auto-detected) → gameplay (reference skeleton vs live skeleton, PERFECT/GREAT/MISS popups, combo milestones, particles) → RESULTS (grade S/A/B/C/F, per-move stats, retry / another dance / home). HIGH SCORES persists top runs locally; SETTINGS stores camera index and mirror default in the user config dir.
 - **Controls:** click or arrows/WS + ENTER on menus · SPACE confirm/start · R retry · P pause · M mirror · Q/Esc back · window is resizable.
 - **Scoring:** unchanged from the GameSession — evaluations at fixed 0.25 s intervals (FPS-independent), 100 pts × combo multiplier (×1→×5 every 8 combo), misses break combo, duplicate frames never count. Passing needs mean accuracy ≥ 60% + ≥ 50% reliable evals.
 - Native file dialog used if tkinter exists (it doesn't here) — fallback is the path field + detected-video buttons.
-
-#### Amy reference animation
-
-With `assets/blender/mission_dancer.blend` and Blender installed, **ANALYZE** uses the cached YOLO11 pose sequence to animate Amy's Mixamo rig and render one transparent PNG per reference sample. This happens in the selection screen's background worker, not the game loop. The first render may take a while; subsequent launches reuse video-specific renders under `cache/amy/`. No video, `.blend`, or rendered PNGs are tracked by Git. The older 48-frame T-pose/sway sprites are no longer used as a reference.
-
-In the play screen, Amy's frame comes from the **reference video's timestamps and current session time**, so changing moves, pausing, retrying, and mirroring stay in sync. **Settings → AMY sprite reference** turns the character on or off. If Blender, the model, or a complete render is unavailable, the extracted animated skeleton remains the reference; pose scoring uses the original YOLO landmarks in either case.
-
-This is a **2D camera-facing approximation** of the recorded motion: shoulders, elbows, wrists, torso/head direction, hips, knees, and ankles drive ten Mixamo bones plus limited root motion. A single-camera pose cannot determine depth, spins, hidden limbs, finger motion, or exact foot contact. Missing/low-confidence joints revert to rest rather than becoming invented moves. Amy does not follow the player's webcam; she follows the selected *reference video*. The render is an offline preprocessing step, not real-time 3D animation.
+- **Reference display:** the extracted reference poses render as the same neon skeleton used everywhere else — synchronized to the video's timestamps, so pausing, retrying, and mirroring stay in sync.
 
 ### Model weights
 
@@ -137,9 +130,9 @@ Or pass a custom location with `--model PATH`.
 
 ### Current status
 
-- **Working features:** Live tracker; OpenCV practice and animated skeleton preview; pygame-ce dance arcade with timed pose scoring, combos, retries, results, beat-reactive effects and optional video-driven Amy reference.
+- **Working features:** Live tracker; OpenCV practice and animated skeleton preview; pygame-ce dance arcade with timed pose scoring, combos, retries, results, beat-reactive effects.
 - **Verified:** CUDA YOLO11l-Pose on RTX 3060, real webcam capture, extraction/cache on `dance_1.mp4`, per-sample timestamp sync and Pygame panel drawing. See the latest changelog entry for current automated test counts.
-- **Known limitations:** Amy approximates visible 2D movement, not full 3D choreography; manual move segmentation; game scoring against a real dancer remains unverified; OpenCV preview/practice still show the skeleton; interactive controls need an on-person check.
+- **Known limitations:** manual move segmentation; game scoring against a real dancer remains unverified; interactive controls need an on-person check.
 - **Libraries, APIs, and datasets used:** [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) (AGPL-3.0; also used for `yolo11l-pose.pt` weights and the `bus.jpg` test image), [PyTorch](https://pytorch.org), [OpenCV](https://opencv.org), [NumPy](https://numpy.org), [pygame-ce](https://pyga.me), [pytest](https://pytest.org).
 
 See [AI_USAGE.md](AI_USAGE.md) for AI assistance and [CHANGELOG.md](CHANGELOG.md) for the development record.

@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T03:20:00+05:30 — Remove the 3D dancer (skeleton-only gameplay)
+
+- Changed: Deleted `avatar.py`, `avatar_render.py`, `ui/sprite.py`, `tests/test_avatar.py`, `tests/test_sprite.py`. Removed from `ui/screens.py`: `render_choreography`/`load_frames` imports, `ctx.amy`/`ctx.avatar_dir`, the analyze worker's Blender render call, the Amy-vs-skeleton branch in the play screen (skeleton-only now), and the Settings "AMY sprite reference" toggle. `persist.py` default settings no longer include `amy` (old saved keys are harmlessly ignored). `assets/blender/` contents (`.blend`, `.blend1`, rendered frames, preview/check PNGs) moved to `~/mission-im-dancable-model-archive/blender/`; `cache/amy/` deleted.
+- Why: User decision — return to the original skeleton-only reference visualization; the Blender/Mixamo path was an experiment.
+- Validation: `pytest tests/` → 116 passed (avatar/sprite tests removed with the feature). No remaining code references to amy/sprite/blender/avatar/mixamo. Skeleton reference panel (`pose_at` + `_neon_skeleton`) is the only reference renderer.
+- Limitations: Saved settings files may still contain an `amy` key — ignored by `load_settings`. Blender no longer needed for any feature.
+
 ## 2026-10-25T03:00:00+05:30 — Single-model cleanup: keep only YOLO11l-Pose
 
 - Changed: Default and only gameplay model is now `yolo11l-pose.pt` (`DEFAULT_MODEL_PATH`, `--model` still accepted for explicit paths). Removed all benchmark infrastructure: `mediapipe_pose.py`, `benchmark.py`, `benchmark_run.py`, `_bench_worker.py`, `tests/test_benchmark.py`, the `--benchmark-pose`/`--visualize-pose`/`--pose-backends`/`--max-frames` flags, `PoseTracker.close()`, benchmark gitignore entries, the `.bench-venv`, and `output/pose_benchmark/` artifacts. Other weights moved outside the repo to `~/mission-im-dancable-model-archive/` (yolo11n/11m/11x/26m/26l + pose_landmarker_heavy.task, all SHA-256 verified before removal). `PoseTracker.predict` keeps `inference_mode` + CUDA sync timing.

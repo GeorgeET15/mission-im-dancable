@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 import pygame
 
-from ..avatar import render_choreography
 from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
@@ -42,7 +41,6 @@ from ..scoring import (
 )
 from . import theme
 from .nav import Navigator
-from .sprite import load_frames
 from .widgets import Button, FocusGroup, ProgressBar, TextField, Toggle
 
 W, H = 1280, 720
@@ -66,8 +64,6 @@ class AppContext:
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
         self.beats = None  # BeatGrid set after analyze; None = no beat sync
-        self.amy = None  # Only reference-driven frames; skeleton otherwise
-        self.avatar_dir: Path | None = None
         self.t = 0.0
         self.particles = theme.Particles()
         self.quit = False
@@ -237,8 +233,6 @@ class SelectScreen(Screen):
         self.progress = -1.0
         self.choreo = None
         self.moves = None
-        self._avatar_dir = None
-        self._avatar_error = ""
         self._thread = None
         self.error = ""
         self.bar = ProgressBar(pygame.Rect(60, 560, 700, 14), color=theme.PINK)
@@ -278,7 +272,7 @@ class SelectScreen(Screen):
 
     def _analyze(self, ctx) -> None:
         if self._thread is not None and self._thread.is_alive():
-            return  # one extraction/render per selection; no competing Blender jobs
+            return  # one extraction per selection
         path = Path(self.field.text.strip()).expanduser()
         if not path.is_file():
             self._set_status(f"file not found: {path}", theme.MISS)
@@ -290,12 +284,8 @@ class SelectScreen(Screen):
             return
         ctx.video_path = path
         ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
-        ctx.amy = None
-        ctx.avatar_dir = None
         self.choreo = None
         self.moves = None
-        self._avatar_dir = None
-        self._avatar_error = ""
         self.btn_start.enabled = False
         self.progress = 0.0
         self._set_status("analyzing choreography…", theme.CYAN)
@@ -325,14 +315,6 @@ class SelectScreen(Screen):
                 self.error = str(exc)
                 return
             ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
-            if ctx.settings.get("amy", True):
-                try:
-                    self._avatar_dir = render_choreography(
-                        choreo, ctx.cfg.cache_dir, ctx.cfg.confidence,
-                        on_status=lambda message: self._set_status(message, theme.CYAN),
-                    )
-                except RuntimeError as exc:
-                    self._avatar_error = str(exc)
             self.choreo, self.moves = choreo, moves
 
         self._thread = threading.Thread(target=work, daemon=True)
@@ -433,14 +415,7 @@ class SelectScreen(Screen):
                 self._set_status("no person detected in the video — try another clip", theme.MISS)
                 self.btn_start.enabled = False
             else:
-                ctx.avatar_dir = self._avatar_dir
-                ctx.amy = load_frames(pygame, self._avatar_dir) if self._avatar_dir else None
-                if ctx.amy is not None:
-                    self._set_status("Amy follows the extracted reference poses — START DANCING", theme.GOOD)
-                elif self._avatar_error:
-                    self._set_status(f"Amy unavailable ({self._avatar_error[:65]}); using skeleton", theme.DIM)
-                else:
-                    self._set_status("ready with reference skeleton — START DANCING", theme.GOOD)
+                self._set_status("ready with reference skeleton — START DANCING", theme.GOOD)
                 self._fill_info(ctx.video_path)
 
     def draw(self, ctx, surf) -> None:
@@ -621,14 +596,11 @@ class PlayScreen(Screen):
             pygame.draw.rect(surf, theme.PANEL, r)
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
         t = self.session.time
-        if getattr(ctx, "amy", None) is not None and ctx.settings.get("amy", True):
-            ctx.amy.draw(pygame, surf, ref_rect, t, mirror=ctx.mirror)
-        else:
-            pose = pose_at(ctx.choreo, t)
-            if pose is not None and pose[:, 2].max() > 0:
-                shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
-                fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *ref_rect)
-                _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
+        pose = pose_at(ctx.choreo, t)
+        if pose is not None and pose[:, 2].max() > 0:
+            shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
+            fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *ref_rect)
+            _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
         if self.frame is not None:
             surf.blit(_frame_surf(pygame, self.frame, cam_rect[2], cam_rect[3]), cam_rect[:2])
             if self.live is not None:
@@ -805,11 +777,10 @@ class SettingsScreen(Screen):
     def enter(self) -> None:
         self.cam = 0
         self.tgl_mirror = Toggle(pygame.Rect(120, 300, 420, 30), "mirror choreography default", "mirror", True)
-        self.tgl_amy = Toggle(pygame.Rect(120, 340, 420, 30), "AMY sprite reference", "amy", True)
         self.btn_cam_m = Button(pygame.Rect(120, 390, 60, 44), "−", "cam-")
         self.btn_cam_p = Button(pygame.Rect(300, 390, 60, 44), "+", "cam+")
         self.btn_back = Button(pygame.Rect(120, 560, 160, 48), "BACK", "back")
-        self.group = FocusGroup([self.tgl_mirror, self.tgl_amy, self.btn_cam_m, self.btn_cam_p, self.btn_back])
+        self.group = FocusGroup([self.tgl_mirror, self.btn_cam_m, self.btn_cam_p, self.btn_back])
 
     def _activate(self, ctx, action: str) -> None:
         if action == "back":
@@ -820,11 +791,6 @@ class SettingsScreen(Screen):
             self.tgl_mirror.value = not self.tgl_mirror.value
             ctx.settings["mirror"] = self.tgl_mirror.value
             ctx.mirror = self.tgl_mirror.value
-        elif action == "amy":
-            self.tgl_amy.value = not self.tgl_amy.value
-            ctx.settings["amy"] = self.tgl_amy.value
-            if self.tgl_amy.value and ctx.amy is None:
-                ctx.amy = load_frames(pygame, ctx.avatar_dir) if ctx.avatar_dir else None
         elif action == "cam-":
             self.cam = max(0, self.cam - 1)
         elif action == "cam+":
@@ -855,7 +821,6 @@ class SettingsScreen(Screen):
     def update(self, ctx, dt) -> None:
         if not getattr(self, "_synced", False):
             self.tgl_mirror.value = bool(ctx.settings.get("mirror", True))
-            self.tgl_amy.value = bool(ctx.settings.get("amy", True))
             self.cam = int(ctx.settings.get("camera_index", 0))
             self._synced = True
         for b in (self.btn_cam_m, self.btn_cam_p, self.btn_back):
@@ -866,13 +831,12 @@ class SettingsScreen(Screen):
         _title(pygame, ctx, surf, ctx.t, y=70)
         surf.blit(ctx.fonts["med"].render("SETTINGS", True, theme.CYAN), (120, 240))
         self.tgl_mirror.draw(pygame, surf, ctx.fonts["sm"])
-        self.tgl_amy.draw(pygame, surf, ctx.fonts["sm"])
         surf.blit(ctx.fonts["sm"].render("camera index", True, theme.TEXT), (120, 370))
         val = ctx.fonts["med"].render(str(self.cam), True, theme.GOLD)
         surf.blit(val, val.get_rect(center=(245, 412)))
         self.btn_cam_m.draw(pygame, surf, ctx.fonts["med"], ctx.t)
         self.btn_cam_p.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        note = ctx.fonts["sm"].render("camera applies on next open · analyze a video to animate Amy", True, theme.DIM)
+        note = ctx.fonts["sm"].render("camera applies on next open", True, theme.DIM)
         surf.blit(note, (120, 450))
         self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
 

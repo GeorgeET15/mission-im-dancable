@@ -93,11 +93,9 @@ def test_settings_roundtrip(tmp_path, monkeypatch):
     assert s == DEFAULT_SETTINGS
     s["camera_index"] = 2
     s["mirror"] = False
-    s["amy"] = False
     save_settings(s)
     assert load_settings()["camera_index"] == 2
     assert load_settings()["mirror"] is False
-    assert load_settings()["amy"] is False
 
 
 def test_scores_sorted_and_capped(tmp_path, monkeypatch):
