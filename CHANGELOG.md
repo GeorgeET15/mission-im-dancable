@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T23:40:00+0530 — Low-poly geometric dancer renderer
+
+- Changed: Added `ui/dancer.py` — procedural low-poly avatar (faceted head/torso, tapered polygon limbs, joint studs, directional facet shading, z-sorted painter order) built from normalized YOLO keypoints; conservative z heuristics only (no 3D reconstruction). `build_dancer` → `draw_dancer` inside `ui/screens.py` panels; `--avatar {dancer,skeleton}` flag (dancer default, skeleton fallback preserved). `lerp_pose` for pose smoothing. 8 new tests.
+- Why: A stylized rhythm-game avatar reads better at gameplay resolution than a thin stick figure.
+- Validation: `pytest` → 124 passed (mapping, missing/low-conf landmarks, NaN safety, finite coords, mirroring, lerp, no input mutation); `--game` ran ~10 s on display, no errors.
+- Limitations: 2.5D depth is heuristic — limbs can't truly come forward; avatar look not yet tuned on real footage; select-screen thumbnail still uses the line skeleton.
+
 ## 2026-10-24T23:20:00+0530 — Beat synchronization
 
 - Changed: Added `beats.py` — ffmpeg-based PCM decode, onset-energy beat detection (60–180 BPM autocorrelation), npz cache with staleness checks, and `BeatGrid` (pulse/phase/nearest queries). Wired into the select-screen analyze thread (no render-loop cost) and PlayScreen (beat-pulsed reference panel border, judgement popup kick). Scoring untouched — visuals only. Fixed `pulse()` off-by-one for beats exactly at t. 7 new tests.

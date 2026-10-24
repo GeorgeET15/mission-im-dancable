@@ -40,6 +40,7 @@ from ..scoring import (
     worst_mismatch,
 )
 from . import theme
+from .dancer import draw_dancer
 from .nav import Navigator
 from .widgets import Button, FocusGroup, ProgressBar, TextField, Toggle
 
@@ -592,15 +593,22 @@ class PlayScreen(Screen):
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
         t = self.session.time
         pose = pose_at(ctx.choreo, t)
+        use_dancer = ctx.cfg.avatar == "dancer"
         if pose is not None and pose[:, 2].max() > 0:
             shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
-            fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *ref_rect)
-            _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
+            if use_dancer:
+                draw_dancer(pygame, surf, shown, ref_rect, ctx.cfg.confidence)
+            else:
+                fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *ref_rect)
+                _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
         if self.frame is not None:
             surf.blit(_frame_surf(pygame, self.frame, cam_rect[2], cam_rect[3]), cam_rect[:2])
             if self.live is not None:
-                fitted = fit_keypoints(self.live.keypoints, self.frame.shape[1], self.frame.shape[0], *cam_rect)
-                _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
+                if use_dancer:
+                    draw_dancer(pygame, surf, self.live.keypoints, cam_rect, ctx.cfg.confidence)
+                else:
+                    fitted = fit_keypoints(self.live.keypoints, self.frame.shape[1], self.frame.shape[0], *cam_rect)
+                    _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
         else:
             msg = self.cam_err or "camera signal lost"
             txt = ctx.fonts["sm"].render(msg[:70], True, theme.MISS)
