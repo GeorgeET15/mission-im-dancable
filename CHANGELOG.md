@@ -4,12 +4,12 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
-## 2026-10-24T23:40:00+0530 — Low-poly geometric dancer renderer
+## 2026-10-25T00:20:00+0530 — Amy sprite reference (milestone 1)
 
-- Changed: Added `ui/dancer.py` — procedural low-poly avatar (faceted head/torso, tapered polygon limbs, joint studs, directional facet shading, z-sorted painter order) built from normalized YOLO keypoints; conservative z heuristics only (no 3D reconstruction). `build_dancer` → `draw_dancer` inside `ui/screens.py` panels; `--avatar {dancer,skeleton}` flag (dancer default, skeleton fallback preserved). `lerp_pose` for pose smoothing. 8 new tests.
-- Why: A stylized rhythm-game avatar reads better at gameplay resolution than a thin stick figure.
-- Validation: `pytest` → 124 passed (mapping, missing/low-conf landmarks, NaN safety, finite coords, mirroring, lerp, no input mutation); `--game` ran ~10 s on display, no errors.
-- Limitations: 2.5D depth is heuristic — limbs can't truly come forward; avatar look not yet tuned on real footage; select-screen thumbnail still uses the line skeleton.
+- Changed: Added `ui/sprite.py` — `SpriteAnim`/`load_frames`/`frame_index_at` play pre-rendered Blender frames, frame index derived from the shared session clock (pause/seek/restart free). PlayScreen draws Amy in the reference panel when `settings["amy"]` (default on, Settings toggle) and frames exist; neon skeleton is the fallback. Rendered 48 transparent frames (320×400 RGBA, EEVEE, platform hidden) from `mission_dancer.blend` via headless `blender -b`. Removed the earlier geometric dancer attempt (`ui/dancer.py`, `--avatar`, tests) — superseded by real Amy. `assets/` added to .gitignore (28MB blend + frames stay local). 6 new tests.
+- Why: Prove Amy can be rendered headless and displayed in-game before attempting pose retargeting.
+- Validation: `pytest` → 122 passed (index math, looping, pause/seek determinism, missing-dir fallback, load roundtrip). Headless draw verified: 48 frames load, 18.5k px blitted, index 12 at t=0.5. `--game` ran ~15 s on display, no errors.
+- Limitations: Amy plays her baked 48-frame sway loop — she does NOT reproduce reference choreography yet (retargeting is a later milestone). Sprite seen only via headless draw test, not live play screen.
 
 ## 2026-10-24T23:20:00+0530 — Beat synchronization
 

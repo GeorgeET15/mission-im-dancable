@@ -27,7 +27,6 @@ class AppConfig:
     game: bool = False  # pygame rhythm-game mode instead of OpenCV practice
     preview: bool = False  # animated reference playback before practice
     no_cam: bool = False  # preview without opening the camera
-    avatar: str = "dancer"  # body renderer: geometric dancer | line skeleton
 
 
 def resolve_device(requested: str, cuda_available: bool) -> str:
@@ -112,12 +111,6 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         help="rhythm-game arcade UI (pygame); picks the video in the app",
     )
     parser.add_argument(
-        "--avatar",
-        choices=("dancer", "skeleton"),
-        default="dancer",
-        help="body renderer in the game UI: geometric dancer or line skeleton",
-    )
-    parser.add_argument(
         "--preview",
         action="store_true",
         help="play the animated reference skeleton first; ENTER continues to practice",
@@ -162,5 +155,4 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         game=args.game,
         preview=args.preview,
         no_cam=args.no_cam,
-        avatar=args.avatar,
     )

@@ -38,3 +38,6 @@ output/
 cache/
 
 # Add entries appropriate to your chosen language or framework.
+
+# Generated Blender assets (project files, rendered frames, previews).
+assets/

@@ -40,8 +40,8 @@ from ..scoring import (
     worst_mismatch,
 )
 from . import theme
-from .dancer import draw_dancer
 from .nav import Navigator
+from .sprite import load_frames
 from .widgets import Button, FocusGroup, ProgressBar, TextField, Toggle
 
 W, H = 1280, 720
@@ -65,6 +65,8 @@ class AppContext:
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
         self.beats = None  # BeatGrid set after analyze; None = no beat sync
+        self.amy = None  # SpriteAnim for the Amy reference; skeleton fallback
+        self._amy_checked = False
         self.t = 0.0
         self.particles = theme.Particles()
         self.quit = False
@@ -492,6 +494,9 @@ class PlayScreen(Screen):
             self.session = GameSession(ctx.moves)
         else:
             self.session = PracticeSession(ctx.choreo, ctx.moves, ctx.cfg.window_s)
+        if not ctx._amy_checked:
+            ctx._amy_checked = True
+            ctx.amy = load_frames(pygame)  # None → skeleton fallback
 
     def exit(self) -> None:
         if getattr(self, "cap", None) is not None:
@@ -592,23 +597,19 @@ class PlayScreen(Screen):
             pygame.draw.rect(surf, theme.PANEL, r)
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
         t = self.session.time
-        pose = pose_at(ctx.choreo, t)
-        use_dancer = ctx.cfg.avatar == "dancer"
-        if pose is not None and pose[:, 2].max() > 0:
-            shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
-            if use_dancer:
-                draw_dancer(pygame, surf, shown, ref_rect, ctx.cfg.confidence)
-            else:
+        if ctx.amy is not None and ctx.settings.get("amy", True):
+            ctx.amy.draw(pygame, surf, ref_rect, t)
+        else:
+            pose = pose_at(ctx.choreo, t)
+            if pose is not None and pose[:, 2].max() > 0:
+                shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
                 fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *ref_rect)
                 _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
         if self.frame is not None:
             surf.blit(_frame_surf(pygame, self.frame, cam_rect[2], cam_rect[3]), cam_rect[:2])
             if self.live is not None:
-                if use_dancer:
-                    draw_dancer(pygame, surf, self.live.keypoints, cam_rect, ctx.cfg.confidence)
-                else:
-                    fitted = fit_keypoints(self.live.keypoints, self.frame.shape[1], self.frame.shape[0], *cam_rect)
-                    _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
+                fitted = fit_keypoints(self.live.keypoints, self.frame.shape[1], self.frame.shape[0], *cam_rect)
+                _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
         else:
             msg = self.cam_err or "camera signal lost"
             txt = ctx.fonts["sm"].render(msg[:70], True, theme.MISS)
@@ -780,10 +781,11 @@ class SettingsScreen(Screen):
     def enter(self) -> None:
         self.cam = 0
         self.tgl_mirror = Toggle(pygame.Rect(120, 300, 420, 30), "mirror choreography default", "mirror", True)
-        self.btn_cam_m = Button(pygame.Rect(120, 360, 60, 44), "−", "cam-")
-        self.btn_cam_p = Button(pygame.Rect(300, 360, 60, 44), "+", "cam+")
+        self.tgl_amy = Toggle(pygame.Rect(120, 340, 420, 30), "AMY sprite reference", "amy", True)
+        self.btn_cam_m = Button(pygame.Rect(120, 390, 60, 44), "−", "cam-")
+        self.btn_cam_p = Button(pygame.Rect(300, 390, 60, 44), "+", "cam+")
         self.btn_back = Button(pygame.Rect(120, 560, 160, 48), "BACK", "back")
-        self.group = FocusGroup([self.tgl_mirror, self.btn_cam_m, self.btn_cam_p, self.btn_back])
+        self.group = FocusGroup([self.tgl_mirror, self.tgl_amy, self.btn_cam_m, self.btn_cam_p, self.btn_back])
 
     def _activate(self, ctx, action: str) -> None:
         if action == "back":
@@ -794,6 +796,11 @@ class SettingsScreen(Screen):
             self.tgl_mirror.value = not self.tgl_mirror.value
             ctx.settings["mirror"] = self.tgl_mirror.value
             ctx.mirror = self.tgl_mirror.value
+        elif action == "amy":
+            self.tgl_amy.value = not self.tgl_amy.value
+            ctx.settings["amy"] = self.tgl_amy.value
+            if self.tgl_amy.value and ctx.amy is None:
+                ctx.amy = load_frames(pygame)
         elif action == "cam-":
             self.cam = max(0, self.cam - 1)
         elif action == "cam+":
@@ -824,6 +831,7 @@ class SettingsScreen(Screen):
     def update(self, ctx, dt) -> None:
         if not getattr(self, "_synced", False):
             self.tgl_mirror.value = bool(ctx.settings.get("mirror", True))
+            self.tgl_amy.value = bool(ctx.settings.get("amy", True))
             self.cam = int(ctx.settings.get("camera_index", 0))
             self._synced = True
         for b in (self.btn_cam_m, self.btn_cam_p, self.btn_back):
@@ -834,13 +842,14 @@ class SettingsScreen(Screen):
         _title(pygame, ctx, surf, ctx.t, y=70)
         surf.blit(ctx.fonts["med"].render("SETTINGS", True, theme.CYAN), (120, 240))
         self.tgl_mirror.draw(pygame, surf, ctx.fonts["sm"])
-        surf.blit(ctx.fonts["sm"].render("camera index", True, theme.TEXT), (120, 340))
+        self.tgl_amy.draw(pygame, surf, ctx.fonts["sm"])
+        surf.blit(ctx.fonts["sm"].render("camera index", True, theme.TEXT), (120, 370))
         val = ctx.fonts["med"].render(str(self.cam), True, theme.GOLD)
-        surf.blit(val, val.get_rect(center=(245, 382)))
+        surf.blit(val, val.get_rect(center=(245, 412)))
         self.btn_cam_m.draw(pygame, surf, ctx.fonts["med"], ctx.t)
         self.btn_cam_p.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        note = ctx.fonts["sm"].render("applied next time the camera opens", True, theme.DIM)
-        surf.blit(note, (120, 420))
+        note = ctx.fonts["sm"].render("camera applies next time it opens · amy needs rendered frames", True, theme.DIM)
+        surf.blit(note, (120, 450))
         self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
 
 
