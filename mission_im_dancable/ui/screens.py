@@ -95,12 +95,14 @@ def _neon_skeleton(pygame, surf, keypoints: np.ndarray, conf: float, color=theme
     for a, b in SKELETON_EDGES:
         pa, pb = keypoints[a], keypoints[b]
         if pa[2] >= conf and pb[2] >= conf:
-            pygame.draw.line(glow, (*color, 70), (pa[0], pa[1]), (pb[0], pb[1]), 7)
-            pygame.draw.line(surf, color, (pa[0], pa[1]), (pb[0], pb[1]), 2)
+            p1, p2 = (int(pa[0]), int(pa[1])), (int(pb[0]), int(pb[1]))
+            pygame.draw.line(glow, (*color, 70), p1, p2, 7)
+            pygame.draw.line(surf, color, p1, p2, 2)
     for x, y, c in keypoints:
         if c >= conf:
-            pygame.draw.circle(glow, (*color, 70), (x, y), 7)
-            pygame.draw.circle(surf, theme.PINK, (x, y), 4)
+            cpt = (int(x), int(y))
+            pygame.draw.circle(glow, (*color, 70), cpt, 7)
+            pygame.draw.circle(surf, theme.PINK, cpt, 4)
     surf.blit(glow, (0, 0))
 
 
