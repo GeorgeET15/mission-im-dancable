@@ -160,8 +160,37 @@ def _chip(pygame, ctx, surf, text: str, center, fg, bg=(16, 10, 30, 220)) -> Non
     surf.blit(img, img.get_rect(center=rect.center))
 
 
+def _torso_scale(k: np.ndarray, conf: float) -> float | None:
+    """Shoulder-to-hip distance — sizing reference for decorative parts."""
+    if all(k[i, 2] >= conf for i in (5, 6, 11, 12)):
+        sh = ((k[5, 0] + k[6, 0]) / 2, (k[5, 1] + k[6, 1]) / 2)
+        hip = ((k[11, 0] + k[12, 0]) / 2, (k[11, 1] + k[12, 1]) / 2)
+        return math.hypot(sh[0] - hip[0], sh[1] - hip[1])
+    return None
+
+
+def _head_circle(k: np.ndarray, conf: float, torso: float | None):
+    """(cx, cy, r) head ring from face keypoints, or None when no face."""
+    ear_l, ear_r = k[3], k[4]
+    if ear_l[2] >= conf and ear_r[2] >= conf:
+        r = max(math.hypot(ear_l[0] - ear_r[0], ear_l[1] - ear_r[1]) * 0.58, 8.0)
+        return (ear_l[0] + ear_r[0]) / 2, (ear_l[1] + ear_r[1]) / 2 - r * 0.3, r
+    pts = [p for p in k[:5] if p[2] >= conf]
+    if not pts:
+        return None
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    return cx, cy - (torso or 90.0) * 0.1, (torso or 90.0) * 0.22
+
+
 def _neon_skeleton(pygame, surf, keypoints: np.ndarray, conf: float, color=theme.CYAN) -> None:
     glow = _glow_layer(pygame, surf.get_size())
+    torso = _torso_scale(keypoints, conf)
+    head = _head_circle(keypoints, conf, torso)
+    if head is not None:
+        hx, hy, hr = int(head[0]), int(head[1]), int(head[2])
+        pygame.draw.circle(glow, (*color, 50), (hx, hy), hr)
+        pygame.draw.circle(surf, color, (hx, hy), hr, 3)
     for a, b in SKELETON_EDGES:
         pa, pb = keypoints[a], keypoints[b]
         if pa[2] >= conf and pb[2] >= conf:
@@ -173,6 +202,23 @@ def _neon_skeleton(pygame, surf, keypoints: np.ndarray, conf: float, color=theme
             cpt = (int(x), int(y))
             pygame.draw.circle(glow, (*color, 70), cpt, 7)
             pygame.draw.circle(surf, theme.PINK, cpt, 4)
+    # fists at the wrists, shoes at the ankles — reads as a dancer silhouette
+    fist_r = max(int((torso or 90.0) * 0.07), 7)
+    for i in (9, 10):
+        if keypoints[i, 2] >= conf:
+            cpt = (int(keypoints[i, 0]), int(keypoints[i, 1]))
+            pygame.draw.circle(glow, (*theme.PINK, 90), cpt, fist_r + 4)
+            pygame.draw.circle(surf, theme.PINK, cpt, fist_r)
+            pygame.draw.circle(surf, color, cpt, fist_r, 2)
+    shoe_w = max(int((torso or 90.0) * 0.24), 14)
+    shoe_h = max(int(shoe_w * 0.45), 7)
+    for i in (15, 16):
+        if keypoints[i, 2] >= conf:
+            cx, cy = int(keypoints[i, 0]), int(keypoints[i, 1])
+            rect = (cx - shoe_w // 2, cy + shoe_h // 2, shoe_w, shoe_h)
+            pygame.draw.ellipse(glow, (*color, 60), rect)
+            pygame.draw.ellipse(surf, theme.GOLD, rect)
+            pygame.draw.ellipse(surf, color, rect, 2)
     surf.blit(glow, (0, 0))
 
 

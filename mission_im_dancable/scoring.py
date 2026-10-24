@@ -108,9 +108,19 @@ def best_window_score(
     return best
 
 
+# COCO indices 0–4 are face landmarks (nose, eyes, ears). They are excluded
+# from correction hints — "move your eye up-left" is not actionable feedback.
+FACE_KEYPOINTS = 5
+
+
 def worst_mismatch(pose_score: PoseScore, min_error: float = MISMATCH_MIN_ERROR) -> int | None:
-    """Keypoint index of the largest reliable error, or None if all close."""
-    errors = pose_score.keypoint_errors
+    """Keypoint index of the largest reliable limb error, or None if all close.
+
+    Face landmarks are ignored — only shoulders, elbows, wrists, hips, knees
+    and ankles can win a correction hint.
+    """
+    errors = pose_score.keypoint_errors.copy()
+    errors[:FACE_KEYPOINTS] = np.nan
     if not np.isfinite(errors).any():
         return None
     idx = int(np.nanargmax(errors))
