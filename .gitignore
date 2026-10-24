@@ -41,3 +41,8 @@ cache/
 
 # Generated Blender assets (project files, rendered frames, previews).
 assets/
+
+# Benchmark isolation + MediaPipe bundles
+.bench-venv/
+*.task
+outputs/

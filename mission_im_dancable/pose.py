@@ -45,13 +45,16 @@ class PoseTracker:
         person is detected. Inference runs synchronously so frames cannot
         queue up behind the model.
         """
+        import torch
+
         start = time.perf_counter()
-        results = self._model.predict(
-            frame,
-            device=self._device,
-            conf=self._confidence,
-            verbose=False,
-        )
+        with torch.inference_mode():
+            results = self._model.predict(
+                frame,
+                device=self._device,
+                conf=self._confidence,
+                verbose=False,
+            )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
         kpts = results[0].keypoints
@@ -74,3 +77,7 @@ class PoseTracker:
         )
         keypoints = np.concatenate([xy, conf[:, None]], axis=1)
         return PoseResult(keypoints=keypoints, inference_ms=elapsed_ms)
+
+    def close(self) -> None:
+        """Drop the model reference so a benchmark worker can release it."""
+        self._model = None

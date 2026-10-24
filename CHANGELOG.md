@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T02:00:00+05:30 — MediaPipe vs YOLO pose backend benchmark
+
+- Changed: Added `mediapipe_pose.py` (VIDEO-mode `PoseLandmarker` adapter; MediaPipe 33→COCO-17 mapping with out-of-frame/NaN rejection, world-landmark capture, pluggable cpu/gpu delegate), `benchmark.py` (streaming `iter_frames`, per-frame latency/reliability/jitter/world stats, peak RSS + CUDA peak, merge-on-save JSON), `benchmark_run.py` + `_bench_worker.py` (one backend per worker process — `.venv` for YOLO, `.bench-venv` for MediaPipe — strictly sequential). New CLI: `--benchmark-pose`, `--pose-backends`, `--visualize-pose`, `--max-frames` (default 30 smoke, 0 = full). `pose.py` gained `torch.inference_mode()` + `close()`. `.gitignore` covers `.bench-venv/` and `*.task`. 19 new tests.
+- Why: Evaluate MediaPipe Pose Landmarker Heavy against YOLO11n-Pose for latency/reliability/3D-animation suitability without touching the default backend. Rewrote the first attempt's staging (whole clip → list + npz → per-worker decompress) after it OOM-killed a 14 GB machine; the streaming design holds ~1 frame at a time.
+- Validation: `pytest tests/` → 153 passed (mapping, bounds, timestamps, cleanup, merge, streaming, bounded viz via synthetic clips). Full 354-frame run per backend, one at a time: yolo/CUDA 8.9 ms mean, 98.6% detected, peak RSS 1.68 GB; mediapipe-heavy CPU 46.9 ms, 94.8%; mediapipe-heavy GL delegate 21.8 ms, 94.8% — EGL binds the **AMD iGPU**, not the RTX 3060. Overlay videos written for all three; world landmarks saved to npz (fingers/heels least stable, hips trivially stable at the origin).
+- Limitations: MediaPipe GPU delegate ≠ NVIDIA; world coords are model estimates; jitter includes real motion; LIVE_STREAM mode not implemented (VIDEO only); benchmark on one clip only.
+
 ## 2026-10-25T00:58:53+05:30 — Drive Amy from the reference skeleton
 
 - Changed: `avatar.py` maps confidence-filtered YOLO17 reference samples to planar directions for Amy's torso, neck, arms, and legs, plus limited hip translation; `avatar_render.py` applies those directions to the skinned Mixamo rig in background Blender and writes one transparent PNG per sampled timestamp. Renders are cached under `cache/amy/` using pose, rig, and confidence fingerprints; incomplete renders are ignored. `ui/screens.py` generates video-specific frames in the selection worker and falls back to the skeleton on failure; `ui/sprite.py` selects frames by reference timestamps (pause, retries, and mirror included), not the old canned 48-frame loop. Persisted Amy preference now loads correctly in `persist.py`. Added `tests/test_avatar.py` and a preference regression test.
