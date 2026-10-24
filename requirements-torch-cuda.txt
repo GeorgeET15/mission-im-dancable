@@ -1,0 +1,8 @@
+# CUDA-enabled PyTorch build (cu128 wheels). Install this file FIRST:
+#   pip install -r requirements-torch-cuda.txt
+# Requires an NVIDIA driver supporting CUDA 12.8+. Verified on an
+# RTX 3060 Laptop GPU with driver 595.91.07.
+
+--index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0
+torchvision==0.26.0

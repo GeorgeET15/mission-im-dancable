@@ -1,0 +1,9 @@
+# Ordinary dependencies. Install PyTorch first via
+# requirements-torch-cuda.txt (or requirements-torch-cpu.txt) so ultralytics
+# does not pull a CPU-only torch build by accident.
+
+opencv-python==5.0.0.93
+numpy==2.5.2
+ultralytics==8.4.187
+pygame-ce==2.5.8
+pytest==9.1.1

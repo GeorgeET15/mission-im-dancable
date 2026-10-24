@@ -4,12 +4,12 @@ Complete this file during the hackathon and use it to prepare your submission th
 
 ## Project
 
-- **Project name:** TODO
-- **Short description:** TODO — describe the problem, what you built, and who benefits.
-- **Code repository URL:** TODO
-- **Final submitted implementation commit SHA:** TODO
-- **Working demo URL or local demo steps:** TODO
-- **Demo access requirements:** TODO — explain any prerequisites without including private credentials.
+- **Project name:** Mission Im-Dancable
+- **Short description:** An AI-powered dance-teaching rhythm game. Pose estimation tracks your body through the webcam, teaches choreography one move at a time, and scores how closely you match the reference — for anyone who wants to learn to dance without a studio.
+- **Code repository URL:** https://github.com/GeorgeET15/mission-im-dancable
+- **Final submitted implementation commit SHA:** TODO — record at submission time
+- **Working demo URL or local demo steps:** Local demo — `python -m mission_im_dancable` (see README for setup).
+- **Demo access requirements:** Webcam; NVIDIA GPU recommended but CPU fallback works. No credentials required.
 
 ## Participants
 
@@ -17,18 +17,18 @@ Participate solo or in a team of up to 4. Remove unused rows.
 
 | Participant name | GitHub handle | Contribution |
 | --- | --- | --- |
-| TODO | TODO | TODO |
+| TODO | GeorgeET15 | Project lead — implementation |
 
 ## Run and demonstrate
 
-- **Prerequisites and versions:** TODO
-- **Install command:** TODO
-- **Required environment variable names:** TODO — use a sanitized example file if needed.
-- **Start command:** TODO
-- **Demo walkthrough:** TODO — brief steps showing the implemented features.
-- **Checks performed and results:** TODO
-- **Known limitations or incomplete features:** TODO
-- **Libraries, APIs, and public datasets used:** TODO — link sources and record attribution where required.
+- **Prerequisites and versions:** Python 3.14, webcam; NVIDIA GPU with CUDA-12.8-capable driver recommended (verified: RTX 3060 Laptop, driver 595.91.07).
+- **Install command:** `pip install -r requirements-torch-cuda.txt && pip install -r requirements.txt` (use `requirements-torch-cpu.txt` on CPU-only machines).
+- **Required environment variable names:** None.
+- **Start command:** `python -m mission_im_dancable`
+- **Demo walkthrough:** Run the start command; the camera feed opens with a skeleton overlay on the detected person, FPS and inference-time HUD. Press Q or Escape to quit. (Full choreography demo pending later milestones.)
+- **Checks performed and results:** CUDA available and GPU-named correctly; YOLO11n-Pose inference on test image at ~11 ms; 21/21 unit tests pass; live camera loop pending an on-person test.
+- **Known limitations or incomplete features:** Milestone 1 only — live tracker, no scoring/game loop yet. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
+- **Libraries, APIs, and public datasets used:** Ultralytics YOLO11 (AGPL-3.0) + `yolo11n-pose.pt` weights + `bus.jpg` sample image; PyTorch cu128; OpenCV; NumPy; pygame-ce; pytest.
 - **AI usage record:** [AI_USAGE.md](AI_USAGE.md)
 - **Development change log:** [CHANGELOG.md](CHANGELOG.md)
 

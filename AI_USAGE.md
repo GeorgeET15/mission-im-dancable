@@ -4,11 +4,11 @@ Use Codex during the hackathon and briefly document its actual contribution here
 
 ## Event build log
 
-No participant AI usage has been recorded yet. Replace the placeholder row as you build. Mark human review as pending until someone has reviewed the contribution.
+Mark human review as pending until someone has reviewed the contribution.
 
 | Date and time with timezone | Tool / model, if known | Task | Assistance and affected files | Human review / corrections | Validation and result |
 | --- | --- | --- | --- | --- | --- |
-| TODO | Codex | TODO | TODO | Pending | TODO |
+| 2026-10-24T22:05:00+0530 | Devin (SWE-2) | Environment setup + milestone 1 live pose tracker | Authored the `mission_im_dancable` package, tests, requirements files, `.gitignore` additions, and README updates; resolved Python 3.14 compatibility (kept 3.14 venv, used `pygame-ce` because `pygame` lacks cp314 wheels); copied installed packages from the prior `~/dance-teacher` venv at user direction. | Pending | CUDA verified on RTX 3060; model loads and runs inference (~11 ms) on test image; 21/21 tests pass; live camera loop smoke-tested end-to-end on the desktop display. |
 
 ## Template preparation
 

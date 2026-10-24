@@ -1,6 +1,8 @@
-# DevDay Exchange Community Hackathon: Kochi
+# Mission Im-Dancable
 
-A repository template for participants at the 10–11 October 2026 hackathon. It contains event rules and documentation scaffolding; build your project from scratch at the event.
+*Your mission, should you choose to accept it.*
+
+An AI-powered dance-teaching rhythm game built at DevDay Exchange Community Hackathon: Kochi (10–11 October 2026). Learn choreography one move at a time, match your skeleton to reference poses, and score combos like a rhythm game.
 
 **[Event and registration on Luma](https://luma.com/z10nz8gp)** · **[Event rules](RULES.md)** · **[Agent instructions](AGENTS.md)**
 
@@ -19,38 +21,62 @@ A repository template for participants at the 10–11 October 2026 hackathon. It
 
 Keep your approved Luma QR code ready for entry, and bring your laptop and charger. Eligible checked-in participants will receive Codex credits and OpenAI API credits.
 
-## Use this template
+## Project overview
 
-1. Select **Use this template → Create a new repository** on GitHub. Create your own project repository and clone it.
-2. Read [RULES.md](RULES.md) and [AGENTS.md](AGENTS.md) before building. Begin project implementation at the event.
-3. Fill in the project overview below as you build. Use any suitable language or framework, keeping the implementation simple.
-4. Record meaningful changes in [CHANGELOG.md](CHANGELOG.md) and your Codex usage in [AI_USAGE.md](AI_USAGE.md). Commit after completed milestones; aim for a meaningful checkpoint about every 30 minutes.
-5. Complete [SUBMISSION.md](SUBMISSION.md) with your code repository, short project description, and working demo. Follow submission instructions announced by the organizers.
-
-This template has no application code or required technology stack. The documentation and commit cadence are repository workflow guidance; the event participation rules are in [RULES.md](RULES.md).
-
-## Project overview — complete during the event
-
-- **Project name:** TODO
-- **Short description:** TODO — what it does, who it helps, and why it matters.
-- **Team:** TODO — participant names and GitHub handles; maximum 4 members.
-- **Working demo:** TODO — link or local demo instructions.
-- **Technology stack:** TODO
+- **Project name:** Mission Im-Dancable
+- **Short description:** A rhythm-game-style dance trainer. It tracks your body with pose estimation, teaches choreography one move at a time, and scores how closely you match the reference — turning "learn to dance" into a mission to beat.
+- **Team:** GeorgeET15
+- **Working demo:** Local demo — see run instructions below.
+- **Technology stack:** Python 3.14, PyTorch (CUDA cu128), Ultralytics YOLO11n-Pose, OpenCV, NumPy, pygame-ce, pytest.
 
 ### Run the project
 
-Replace these placeholders with commands that actually work for your project:
+1. **Prerequisites:** Python 3.14, a webcam, and (for GPU inference) an NVIDIA GPU with a CUDA-12.8-capable driver. CPU fallback works too — just slower.
+2. **Create the environment:**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+3. **Install dependencies** — CUDA torch first so ultralytics doesn't pull a CPU-only build:
+   ```bash
+   pip install -r requirements-torch-cuda.txt   # NVIDIA GPU
+   # or: pip install -r requirements-torch-cpu.txt  # CPU-only machines
+   pip install -r requirements.txt
+   ```
+4. **Model weights:** place `yolo11n-pose.pt` in `models/` (see *Model weights* below).
+5. **Start the live pose tracker:**
+   ```bash
+   python -m mission_im_dancable
+   ```
+   Useful flags: `--camera 1`, `--width 640 --height 480`, `--device cpu`, `--model PATH`, `--conf 0.5`.
+6. **Run tests:**
+   ```bash
+   python -m pytest tests/
+   ```
 
-1. Prerequisites and versions: TODO
-2. Dependency installation: TODO
-3. Environment setup: TODO — list required variable names and provide a sanitized `.env.example` if needed.
-4. Start the project: TODO
-5. Run checks or tests: TODO
+### Model weights
+
+`yolo11n-pose.pt` (Ultralytics YOLO11n-Pose) is required but **not committed to Git**. Download it into `models/`:
+
+```bash
+mkdir -p models
+curl -L -o models/yolo11n-pose.pt https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-pose.pt
+```
+
+Or pass a custom location with `--model PATH`.
+
+### Camera troubleshooting
+
+- Default camera index is `0`; try `--camera 1` if your laptop enumerates IR/extra sensors first.
+- `v4l2-ctl --list-devices` lists detected cameras on Linux.
+- If another app is using the webcam (browser, Cheese, Zoom), close it first.
+- The app exits with a clear error and code `2` when no camera is accessible — no fake frames are shown.
 
 ### Current status
 
-- Working features: TODO
-- Known limitations: TODO
-- Libraries, APIs, and public datasets used: TODO — include source links and applicable attribution.
+- **Working features:** milestone 1 live pose tracker — opens the camera, runs YOLO11n-Pose on CUDA (with CPU fallback via `--device cpu`), draws the detected skeleton and keypoints, shows FPS and inference time, and exits cleanly on Q/Escape. 21 unit tests cover config, geometry, timing, and rendering.
+- **Verified:** torch 2.11.0+cu128, `torch.cuda.is_available() == True` on RTX 3060 Laptop GPU; YOLO11n-Pose loads and detects a person in a test image at ~11 ms/frame on CUDA; webcam reads real frames; the full app loop ran on the desktop display without errors.
+- **Known limitations:** live tracker only — no reference choreography, scoring, or game UI yet. `pygame` proper has no Python 3.14 wheels, so `pygame-ce` is used. Skeleton quality on a moving dancer still needs an on-person check.
+- **Libraries, APIs, and datasets used:** [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) (AGPL-3.0; also used for `yolo11n-pose.pt` weights and the `bus.jpg` test image), [PyTorch](https://pytorch.org), [OpenCV](https://opencv.org), [NumPy](https://numpy.org), [pygame-ce](https://pyga.me), [pytest](https://pytest.org).
 
 See [AI_USAGE.md](AI_USAGE.md) for AI assistance and [CHANGELOG.md](CHANGELOG.md) for the development record.

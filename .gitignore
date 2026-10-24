@@ -21,4 +21,19 @@ __pycache__/
 Thumbs.db
 *.log
 
+# Model weights, datasets, and local media (never committed).
+*.pt
+*.onnx
+*.engine
+*.weights
+
+# Local videos, recordings, and generated output.
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+recordings/
+output/
+
 # Add entries appropriate to your chosen language or framework.
