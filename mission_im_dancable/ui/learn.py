@@ -13,7 +13,10 @@ import threading
 import pygame
 
 from ..camera import CameraError
+from ..dance import build_dance
+from ..editor import SegmentDraft, draft_moves, suggest_boundaries
 from ..learn import LearnSession, SEEK_STEP
+from ..moves import MovesFileError, load_dance_file, save_dance_file
 from ..persist import MOVE_STATUSES, move_statuses, set_move_status
 from ..reference import pose_at
 from ..render import fit_keypoints
@@ -33,7 +36,7 @@ from .screens import (
     close_camera,
     eval_against_reference,
 )
-from .widgets import Button, TimelineBar
+from .widgets import Button, TextField, TimelineBar
 
 REF_RECT = (60, 190, 560, 350)
 CAM_RECT = (660, 190, 560, 350)
@@ -77,6 +80,13 @@ class LearnScreen(Screen):
             self.btn_play, self.btn_speed, self.btn_prev, self.btn_next,
             self.btn_loop, self.btn_mark, self.btn_mirror, self.btn_back,
         ]
+        self.btn_edit = Button(pygame.Rect(1090, 142, 130, 36), "EDIT SEGS", "edit")
+        # Segment editor state — active only while self.editing
+        self.editing = False
+        self.draft: SegmentDraft | None = None
+        self.name_field = TextField(pygame.Rect(60, 552, 560, 30), placeholder="segment name")
+        self._warn = ""            # one-shot confirmation/warning line
+        self._pending = ""         # "save" | "draft" | "discard" — needs a repeat key
 
     # -- one-time setup --------------------------------------------------------
 
@@ -139,6 +149,140 @@ class LearnScreen(Screen):
         )
         self.statuses = set_move_status(video, self.session.selected, nxt)
 
+    # -- segment editor ---------------------------------------------------------------
+
+    def _toggle_edit(self, ctx) -> None:
+        if self.editing:
+            if self.draft and self.draft.dirty and self._pending != "discard":
+                self._pending = "discard"
+                self._warn = "unsaved edits — E/ESC again to discard them"
+                return
+            self.editing = False
+            self.draft = None
+            self._pending = self._warn = ""
+        else:
+            self.editing = True
+            self.draft = SegmentDraft(list(ctx.moves), self.session.duration)
+            self._sync_draft_selected(ctx)
+            self._pending = self._warn = ""
+
+    def _sync_draft_selected(self, ctx) -> None:
+        """Playhead previews the segment selected in the draft."""
+        self.session.select(self.draft.selected)
+
+    def _suggest(self, ctx) -> None:
+        if self.draft.dirty and self._pending != "draft":
+            self._pending = "draft"
+            self._warn = "replace your edits with auto-draft? press G again"
+            return
+        bounds = suggest_boundaries(
+            ctx.choreo, getattr(ctx, "beats", None), self.session.duration
+        )
+        if not bounds:
+            self._warn = "no suggestion found — cut segments manually with B"
+            return
+        self.draft.set_segments(
+            draft_moves(self.session.duration, bounds), from_draft=True
+        )
+        self._pending = ""
+        self._warn = "suggested draft — A accept · B/X/[ ] adjust · S save"
+
+    def _save_draft(self, ctx) -> None:
+        errs = self.draft.errors()
+        if errs:
+            self._warn = f"can't save: {errs[0]}"
+            return
+        target = ctx.moves_path or ctx.video_path.with_suffix(".moves.json")
+        if target.is_file() and self._pending != "save":
+            self._pending = "save"
+            self._warn = f"overwrite {target.name}? press S again to confirm"
+            return
+        try:
+            save_dance_file(target, self.draft.segments)
+        except OSError as exc:
+            self._warn = f"save failed: {exc}"
+            return
+        # Reload so every consumer uses the same validated segment data.
+        ctx.moves_path = target
+        moves, meta = load_dance_file(target, ctx.choreo.duration)
+        ctx.moves = moves
+        ctx.dance = build_dance(ctx.video_path, ctx.choreo, moves, meta)
+        self.session.moves = moves
+        self.session.selected = min(self.session.selected, len(moves) - 1)
+        self.draft.dirty = self.draft.from_draft = False
+        self._pending = ""
+        self._warn = f"saved {target.name} — {len(moves)} segments"
+
+    def _edit_key(self, ctx, ev) -> bool:
+        """Editor key handling. Returns True when the key was consumed."""
+        k = ev.key
+        d = self.draft
+        if k in (pygame.K_b, pygame.K_x, pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET,
+                 pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+            self._pending = ""  # a real boundary edit cancels pending confirmations
+        if self.name_field.focused:
+            if k == pygame.K_RETURN:
+                d.rename(self.name_field.text)
+                self.name_field.focused = False
+                self._pending = ""
+            elif k == pygame.K_ESCAPE:
+                self.name_field.focused = False
+            else:
+                self.name_field.handle_key(k, ev.unicode)
+            return True
+        if k == pygame.K_b:
+            if d.split_at(self.session.time):
+                self._warn = ""
+            else:
+                self._warn = "playhead isn't inside a segment — seek first"
+        elif k == pygame.K_x:
+            if not d.merge_next():
+                self._warn = "no boundary after this segment to remove"
+        elif k == pygame.K_LEFTBRACKET:
+            d.nudge_boundary(-0.1)
+        elif k == pygame.K_RIGHTBRACKET:
+            d.nudge_boundary(0.1)
+        elif k in (pygame.K_UP, pygame.K_DOWN):
+            d.select(d.selected + (-1 if k == pygame.K_UP else 1))
+            self._sync_draft_selected(ctx)
+        elif k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+            d.reorder(-1 if k == pygame.K_PAGEUP else 1)
+        elif k == pygame.K_n:
+            self.name_field.text = d.segment.name
+            self.name_field.focused = True
+        elif k == pygame.K_RETURN:
+            self._sync_draft_selected(ctx)
+            self.session.loop = "segment"
+            self.session.playing = True
+            self._reanchor = True
+        elif k == pygame.K_a and d.from_draft:
+            d.accept()
+            self._warn = "suggestions accepted — adjust or press S to save"
+        elif k == pygame.K_g:
+            self._suggest(ctx)
+        elif k == pygame.K_s:
+            self._save_draft(ctx)
+        elif k in (pygame.K_e, pygame.K_ESCAPE):
+            self._toggle_edit(ctx)
+        elif k == pygame.K_SPACE:
+            self.session.toggle()
+            self._reanchor = True
+        elif k == pygame.K_LEFT:
+            self.session.skip(-SEEK_STEP)
+            self._reanchor = True
+        elif k == pygame.K_RIGHT:
+            self.session.skip(SEEK_STEP)
+            self._reanchor = True
+        elif k == pygame.K_COMMA:
+            self.session.step_frames(-1)
+            self._reanchor = True
+        elif k == pygame.K_PERIOD:
+            self.session.step_frames(1)
+            self._reanchor = True
+        else:
+            return False
+        return True
+
     # -- soundtrack -----------------------------------------------------------------
 
     def _sync_music(self, ctx, prev_t: float) -> None:
@@ -191,6 +335,8 @@ class LearnScreen(Screen):
             self._cycle_status(ctx)
         elif action == "mirror":
             ctx.mirror = not ctx.mirror
+        elif action == "edit":
+            self._toggle_edit(ctx)
         elif action == "back":
             self._back(ctx)
 
@@ -198,20 +344,31 @@ class LearnScreen(Screen):
         self._ensure(ctx)
         s = self.session
         if ev.type == pygame.MOUSEMOTION:
-            for b in self._buttons:
+            for b in [*self._buttons, self.btn_edit]:
                 b.hovered = b.contains(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             frac = self.timeline.fraction_at(ev.pos)
             if frac is not None:
                 s.seek(frac * s.duration)
                 s.selected = s.active_index  # the block you clicked is selected
+                if self.editing:
+                    self.draft.select(s.selected)
                 self._reanchor = True
                 return
-            for b in self._buttons:
+            if self.editing and self.name_field.contains(ev.pos):
+                self.name_field.text = self.draft.segment.name
+                self.name_field.focused = True
+                return
+            self.name_field.focused = False
+            for b in [*self._buttons, self.btn_edit]:
                 if b.contains(ev.pos) and b.enabled:
                     b.press()
                     self._activate(ctx, b.action)
         elif ev.type == pygame.KEYDOWN:
+            if self.editing and self._edit_key(ctx, ev):
+                return
+            if self.editing:
+                return  # swallow non-editor keys while editing
             k = ev.key
             if k == pygame.K_SPACE:
                 s.toggle()
@@ -240,6 +397,8 @@ class LearnScreen(Screen):
                 s.cycle_speed(-1)
             elif k == pygame.K_EQUALS:
                 s.cycle_speed(1)
+            elif k == pygame.K_e:
+                self._toggle_edit(ctx)
             elif k == pygame.K_k:
                 self._cycle_status(ctx)
             elif k == pygame.K_m:
@@ -343,37 +502,71 @@ class LearnScreen(Screen):
         )
         diff = f" · {dance.difficulty}" if dance is not None and dance.difficulty else ""
         surf.blit(f_med.render(f"LEARN — {title}{diff}", True, theme.CYAN), (60, 148))
-        keys = f_sm.render(
-            "SPACE play · ←/→ seek · ,/. frame · N/P segment · L loop · -/= speed · K mark · M mirror · Q back",
-            True, theme.DIM)
-        _dim_strip(pygame, surf, (40, 694, 740, 24))
+        key_text = (
+            "B split · X merge · [ ] nudge · ↑/↓ select · PgUp/Dn reorder · N name · ENTER preview · G suggest · A accept · S save · E done"
+            if self.editing else
+            "SPACE play · ←/→ seek · ,/. frame · N/P segment · L loop · -/= speed · K mark · E edit segs · Q back"
+        )
+        keys = f_sm.render(key_text, True, theme.DIM)
+        _dim_strip(pygame, surf, (40, 694, 940, 24))
         surf.blit(keys, (60, 698))
 
         self._draw_panels(ctx, surf)
 
-        # selected segment + its mark and instruction
-        seg = s.moves[s.selected]
-        status = self.statuses.get(s.selected)
-        mark = f" · {status}" if status else ""
-        line = f"SEGMENT {s.selected + 1}/{len(s.moves)} — {seg.name}  [{seg.start:.1f}–{seg.end:.1f}s]{mark}"
-        surf.blit(f_sm.render(line, True, theme.TEXT), (60, 552))
-        if s.active_index != s.selected:
-            now = f_sm.render(f"▶ playing: {s.moves[s.active_index].name}", True, theme.GOLD)
-            surf.blit(now, now.get_rect(topright=(1220, 552)))
-        note = seg.instruction or "watch the reference, then copy the dancer"
-        surf.blit(f_sm.render(note[:96], True, theme.DIM), (60, 576))
+        # selected segment + its mark and instruction (or the edit draft)
+        if self.editing:
+            d = self.draft
+            seg = d.segment
+            badge = " · SUGGESTED" if d.from_draft else (" · unsaved" if d.dirty else "")
+            line = (f"EDIT {d.selected + 1}/{len(d.segments)} — {seg.name}  "
+                    f"[{seg.start:.1f}–{seg.end:.1f}s]{badge}")
+            surf.blit(f_sm.render(line, True, theme.GOLD), (60, 530))
+            self.name_field.draw(pygame, surf, f_sm, ctx.t)
+            surf.blit(f_sm.render("click field or N to rename", True, theme.DIM), (630, 558))
+        else:
+            seg = s.moves[s.selected]
+            status = self.statuses.get(s.selected)
+            mark = f" · {status}" if status else ""
+            line = f"SEGMENT {s.selected + 1}/{len(s.moves)} — {seg.name}  [{seg.start:.1f}–{seg.end:.1f}s]{mark}"
+            surf.blit(f_sm.render(line, True, theme.TEXT), (60, 552))
+            if s.active_index != s.selected:
+                now = f_sm.render(f"▶ playing: {s.moves[s.active_index].name}", True, theme.GOLD)
+                surf.blit(now, now.get_rect(topright=(1220, 552)))
+            note = seg.instruction or "watch the reference, then copy the dancer"
+            surf.blit(f_sm.render(note[:96], True, theme.DIM), (60, 576))
 
         # match feedback — guidance, not a score
-        if self.accuracy is not None:
+        if self.accuracy is not None and not self.editing:
             _chip(pygame, ctx, surf, f"match {self.accuracy * 100:3.0f}%",
                   (CAM_RECT[0] + CAM_RECT[2] - 74, CAM_RECT[1] + 28), theme.CYAN)
-        hint = self.hint or ("copy the pose — no score here" if self.cam_state == "ready" else "")
-        if hint:
-            surf.blit(f_sm.render(hint[:70], True, theme.MISS if self.hint else theme.DIM), (60, 594))
+        if self.editing:
+            if self._warn:
+                surf.blit(f_sm.render(self._warn[:80], True, theme.GOLD), (60, 594))
+        else:
+            hint = self.hint or ("copy the pose — no score here" if self.cam_state == "ready" else "")
+            if hint:
+                surf.blit(f_sm.render(hint[:70], True, theme.MISS if self.hint else theme.DIM), (60, 594))
 
         # seekable segment timeline + progress marks
-        self.timeline.draw(pygame, surf, f_sm, s.time, s.duration,
-                           s.moves, s.segment_state)
+        if self.editing:
+            d = self.draft
+
+            def edit_state(i):
+                if i == d.selected:
+                    return "selected"
+                if i == s.active_index:
+                    return "active"
+                if d.segments[i].end <= s.time:
+                    return "done"
+                return "upcoming"
+
+            self.timeline.draw(pygame, surf, f_sm, s.time, s.duration,
+                               d.segments, edit_state)
+            if d.from_draft:
+                pygame.draw.rect(surf, theme.GOLD, self.timeline.rect, 2, border_radius=10)
+        else:
+            self.timeline.draw(pygame, surf, f_sm, s.time, s.duration,
+                               s.moves, s.segment_state)
         x, y, w, h = self.timeline.rect
         for i, st in self.statuses.items():
             if 0 <= i < len(s.moves):
@@ -388,6 +581,10 @@ class LearnScreen(Screen):
         self.btn_play.label = "❚❚ PAUSE" if s.playing else "▶ PLAY"
         self.btn_speed.label = f"{s.speed:g}×"
         self.btn_loop.label = f"LOOP {s.loop.upper()}"
-        self.btn_mark.label = f"MARK: {(status or '—').upper()}"
+        mark_status = self.statuses.get(s.selected)
+        self.btn_mark.label = f"MARK: {(mark_status or '—').upper()}"
         for b in self._buttons:
             b.draw(pygame, surf, f_med, ctx.t)
+        self.btn_edit.label = "DONE" if self.editing else "EDIT SEGS"
+        self.btn_edit.update(0.016)
+        self.btn_edit.draw(pygame, surf, ctx.fonts["sm"], ctx.t)

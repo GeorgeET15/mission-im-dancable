@@ -85,6 +85,69 @@ def load_dance_file(path: Path, video_duration: float) -> tuple[list[Move], dict
     return moves, meta
 
 
+def load_dance_meta(path: Path) -> dict:
+    """Lenient metadata read for an existing annotation file.
+
+    Returns the optional id/title/difficulty fields, or {} when the file is
+    missing, unreadable, or not valid JSON — meta is never fatal.
+    """
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: raw[key].strip()
+        for key in ("id", "title", "difficulty")
+        if isinstance(raw.get(key), str) and raw[key].strip()
+    }
+
+
+def validate_segments(moves: list[Move], duration: float) -> list[str]:
+    """Errors for a proposed segment list; empty list means saveable.
+
+    Segments may have gaps between them (time belongs to the upcoming
+    segment) but must never overlap or run outside the video.
+    """
+    errors: list[str] = []
+    if not moves:
+        return ["at least one segment is required"]
+    prev_end = -1.0
+    for i, m in enumerate(moves):
+        label = f"segment {i + 1} ('{m.name}')"
+        if not m.name.strip():
+            errors.append(f"{label}: name must not be empty")
+        if m.start < 0:
+            errors.append(f"{label}: starts before the video")
+        if m.end <= m.start:
+            errors.append(f"{label}: zero or negative length")
+        if m.end > duration + TIMESTAMP_EPSILON:
+            errors.append(f"{label}: ends past the video duration")
+        if m.start < prev_end - TIMESTAMP_EPSILON:
+            errors.append(f"{label}: overlaps the previous segment")
+        prev_end = max(prev_end, m.end)
+    return errors
+
+
+def save_dance_file(path: Path, moves: list[Move], meta: dict | None = None) -> None:
+    """Write a ``<stem>.moves.json`` sidecar.
+
+    Metadata (id/title/difficulty) already in the file is preserved unless
+    overridden by ``meta`` — saving edits never destroys unrelated fields.
+    """
+    merged = {**load_dance_meta(path), **(meta or {})}
+    raw = dict(merged)
+    raw["moves"] = [
+        {"name": m.name, "start": round(m.start, 3), "end": round(m.end, 3),
+         **({"instruction": m.instruction} if m.instruction else {})}
+        for m in moves
+    ]
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(raw, indent=2) + "\n")
+    tmp.replace(path)
+
+
 def move_index_at(moves: list[Move], t: float) -> int:
     """Segment index owning time t: the first move whose end is past t.
 

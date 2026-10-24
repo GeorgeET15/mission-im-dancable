@@ -4,6 +4,15 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T07:05:00+05:30 — In-game segment editor + auto-suggestions
+
+- Changed: `editor.py` — `SegmentDraft` working copy of the move list (split at playhead, merge with next, ±0.1 s boundary nudge, reorder, rename, `from_draft` flag) and `suggest_boundaries`: cuts every 8th beat when the BeatGrid is usable, else falls back to valleys in cached pose-motion energy. `draft_moves` guarantees non-overlapping, ≥0.2 s segments.
+- Changed: `moves.py` — `validate_segments` (empty/overlap/out-of-range/empty-name checks), `save_dance_file` (atomic write that preserves existing id/title/difficulty meta), `load_dance_meta` lenient reader.
+- Changed: `ui/learn.py` — E key / EDIT SEGS button opens the editor inside Learn Mode only: B split · X merge · [ ] nudge · ↑/↓ select · PgUp/Dn reorder · N name (TextField) · ENTER preview-loops the segment · G auto-draft (confirm-on-repeat when edits exist) · A accept suggestions (gold-tinted until accepted) · S save (confirm-on-repeat when overwriting an existing file) · E/ESC exits (confirm-on-repeat to discard). Saving reloads `ctx.moves`/`ctx.dance`/session moves so navigation, looping, and Play results share one segment list. Videos without a sidecar still work (default full-video segment) and editing one creates `<stem>.moves.json` on save.
+- Why: every imported video needs a way to get real, verified segments without hand-editing JSON.
+- Validation: 17 new tests in `test_editor.py` (split/merge/nudge/reorder/rename/validation/save-reload/meta-preservation/invalid sidecar/beat+motion suggestions/edit-mode flow/overwrite confirm) → 212/212 pass.
+- Limitations: editor is keyboard-driven (no drag); suggestions are phrase-level drafts, not verified moves — the UI labels them SUGGESTED until accepted.
+
 ## 2026-10-25T06:10:00+05:30 — Learn Mode + Play Mode two-mode architecture
 
 - Changed: Home screen now offers **LEARN** and **PLAY** as the two primary modes sharing one dance library. `ctx.mode` is `"learn"`/`"play"`; the select screen's mode toggle is gone (mode comes from Home), its start button routes to `LearnScreen` or `ReadyScreen`→`PlayScreen`, and its header/info show mode + difficulty.
