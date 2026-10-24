@@ -35,5 +35,6 @@ Thumbs.db
 *.webm
 recordings/
 output/
+cache/
 
 # Add entries appropriate to your chosen language or framework.

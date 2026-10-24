@@ -25,9 +25,9 @@ Participate solo or in a team of up to 4. Remove unused rows.
 - **Install command:** `pip install -r requirements-torch-cuda.txt && pip install -r requirements.txt` (use `requirements-torch-cpu.txt` on CPU-only machines).
 - **Required environment variable names:** None.
 - **Start command:** `python -m mission_im_dancable`
-- **Demo walkthrough:** Run the start command; the camera feed opens with a skeleton overlay on the detected person, FPS and inference-time HUD. Press Q or Escape to quit. (Full choreography demo pending later milestones.)
-- **Checks performed and results:** CUDA available and GPU-named correctly; YOLO11n-Pose inference on test image at ~11 ms; 21/21 unit tests pass; live camera loop pending an on-person test.
-- **Known limitations or incomplete features:** Milestone 1 only — live tracker, no scoring/game loop yet. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
+- **Demo walkthrough:** Tracker demo: `python -m mission_im_dancable` — camera feed with skeleton overlay and FPS HUD (Q/Esc quits). Practice demo: `python -m mission_im_dancable --source dance.mp4 --moves moves.json --mirror` — reference skeleton (left) vs. your live skeleton (right), per-move looping, match percentage and one correction hint (N/P switch moves).
+- **Checks performed and results:** CUDA available and GPU-named correctly; YOLO11n-Pose inference ~11 ms on test image; 55/55 unit tests pass; extraction + caching verified on a synthetic clip; live tracker and practice mode both ran on the desktop display. Live practice with a real dancer is untested.
+- **Known limitations or incomplete features:** No scoring history/combos/levels yet; reference shown as skeleton rather than video pixels; move segmentation is manual; real-dancer accuracy unverified. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
 - **Libraries, APIs, and public datasets used:** Ultralytics YOLO11 (AGPL-3.0) + `yolo11n-pose.pt` weights + `bus.jpg` sample image; PyTorch cu128; OpenCV; NumPy; pygame-ce; pytest.
 - **AI usage record:** [AI_USAGE.md](AI_USAGE.md)
 - **Development change log:** [CHANGELOG.md](CHANGELOG.md)

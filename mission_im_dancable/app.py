@@ -16,6 +16,11 @@ WINDOW_NAME = "Mission Im-Dancable — live pose tracker"
 
 def run(cfg: AppConfig) -> int:
     """Run the camera + pose loop until the user quits. Returns an exit code."""
+    if cfg.source is not None:
+        from .practice import run_practice
+
+        return run_practice(cfg)
+
     device = resolve_device(cfg.device, torch.cuda.is_available())
     tracker = PoseTracker(cfg.model_path, device, cfg.confidence)
 
@@ -27,7 +32,7 @@ def run(cfg: AppConfig) -> int:
 
     fps = FpsCounter()
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    print(f"Tracking on {device.upper()} — press Q or Escape in the window to quit.")
+    print(f"Tracking on {device.upper()} — press Q or Escape in the window to quit.", flush=True)
     try:
         while True:
             ok, frame = cap.read()

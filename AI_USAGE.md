@@ -8,6 +8,7 @@ Mark human review as pending until someone has reviewed the contribution.
 
 | Date and time with timezone | Tool / model, if known | Task | Assistance and affected files | Human review / corrections | Validation and result |
 | --- | --- | --- | --- | --- | --- |
+| 2026-10-24T22:15:00+0530 | Devin (SWE-2) | Milestone 2: reference extraction + practice mode | Authored `reference.py`, `moves.py`, `scoring.py`, `practice.py`, config flags, `.gitignore` cache rule, 34 new tests, and README/CHANGELOG updates; generated a synthetic pan clip for end-to-end verification. Tests caught and Devin fixed a cache staleness bug (stored-vs-requested sample rate) and a first-correction delay bug. | Pending | 55/55 tests pass; extraction + cache-hit verified on synthetic clip (60/60 detections); practice window ran on display with no errors; real-dancer accuracy untested. |
 | 2026-10-24T22:05:00+0530 | Devin (SWE-2) | Environment setup + milestone 1 live pose tracker | Authored the `mission_im_dancable` package, tests, requirements files, `.gitignore` additions, and README updates; resolved Python 3.14 compatibility (kept 3.14 venv, used `pygame-ce` because `pygame` lacks cp314 wheels); copied installed packages from the prior `~/dance-teacher` venv at user direction. | Pending | CUDA verified on RTX 3060; model loads and runs inference (~11 ms) on test image; 21/21 tests pass; live camera loop smoke-tested end-to-end on the desktop display. |
 
 ## Template preparation

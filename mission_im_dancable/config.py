@@ -17,6 +17,13 @@ class AppConfig:
     model_path: Path = DEFAULT_MODEL_PATH
     device: str = "auto"  # "auto", "cuda", or "cpu"
     confidence: float = 0.3
+    # Practice mode (active when source is set; camera mode otherwise).
+    source: Path | None = None
+    moves_path: Path | None = None
+    sample_fps: float = 10.0
+    window_s: float = 0.15
+    mirror: bool = False
+    cache_dir: Path = Path("cache")
 
 
 def resolve_device(requested: str, cuda_available: bool) -> str:
@@ -57,12 +64,56 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         default=0.3,
         help="keypoint confidence threshold for display (0-1)",
     )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        metavar="VIDEO",
+        help="reference choreography video; enables practice mode",
+    )
+    parser.add_argument(
+        "--moves",
+        type=Path,
+        default=None,
+        metavar="JSON",
+        help="move segmentation file for the reference video",
+    )
+    parser.add_argument(
+        "--sample-fps",
+        type=float,
+        default=10.0,
+        help="pose extraction rate for the reference video (default: 10)",
+    )
+    parser.add_argument(
+        "--window",
+        type=float,
+        default=0.15,
+        metavar="SECONDS",
+        help="match window half-width around the reference pose (default: 0.15)",
+    )
+    parser.add_argument(
+        "--mirror",
+        action="store_true",
+        help="mirror the reference so it matches selfie-view movement",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("cache"),
+        help="directory for extracted-pose caches (default: cache/)",
+    )
     args = parser.parse_args(argv)
 
     if args.width <= 0 or args.height <= 0:
         parser.error("frame dimensions must be positive")
     if not 0.0 <= args.conf <= 1.0:
         parser.error("--conf must be between 0 and 1")
+    if args.sample_fps <= 0:
+        parser.error("--sample-fps must be positive")
+    if args.window < 0:
+        parser.error("--window must be >= 0")
+    if args.moves and not args.source:
+        parser.error("--moves requires --source")
 
     return AppConfig(
         camera_index=args.camera,
@@ -71,4 +122,10 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         model_path=args.model,
         device=args.device,
         confidence=args.conf,
+        source=args.source,
+        moves_path=args.moves,
+        sample_fps=args.sample_fps,
+        window_s=args.window,
+        mirror=args.mirror,
+        cache_dir=args.cache_dir,
     )

@@ -49,10 +49,38 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
    python -m mission_im_dancable
    ```
    Useful flags: `--camera 1`, `--width 640 --height 480`, `--device cpu`, `--model PATH`, `--conf 0.5`.
-6. **Run tests:**
+6. **Practice against a reference video:**
+   ```bash
+   python -m mission_im_dancable --source path/to/dance.mp4 --moves moves.json --mirror
+   ```
+   The first run extracts poses at `--sample-fps` (default 10) and caches them in `cache/`; later runs reuse the cache.
+7. **Run tests:**
    ```bash
    python -m pytest tests/
    ```
+
+### Practice mode
+
+`--source VIDEO` enables move-by-move practice: the reference skeleton appears on the left, your live camera feed and skeleton on the right. The app loops inside each move's time range; press **N** for the next move, **P** for the previous one, **Q/Esc** to quit.
+
+- **Supported video formats:** anything OpenCV/FFmpeg decodes — `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`. Local files only; keep them out of Git.
+- **Match score:** your pose is normalized (hip-centred, torso-scaled) and compared against reference poses inside a `--window SECONDS` window (default ±0.15 s), so exact timestamp sync isn't required. Low-confidence landmarks are ignored rather than trusted; too few reliable landmarks shows `match -- (low confidence)`.
+- **Corrections:** the single largest reliable mismatch is shown (e.g. `left wrist: move up-left`) and held stable so it doesn't flicker every frame.
+- **`--mirror`:** flips the reference left-right so the instructor's left side maps to your right — the natural way to copy someone facing you.
+- **Extraction cache:** stored under `cache/` (gitignored). A cache is reused only when the video file, sample rate, model, and confidence all match; otherwise it's re-extracted automatically.
+
+**Move segmentation** is manual via a JSON file:
+
+```json
+{
+  "moves": [
+    {"name": "intro sway", "start": 0.0, "end": 2.4},
+    {"name": "step touch", "start": 2.4, "end": 6.0}
+  ]
+}
+```
+
+Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video duration`. Without `--moves`, the whole video is one move.
 
 ### Model weights
 
@@ -74,9 +102,9 @@ Or pass a custom location with `--model PATH`.
 
 ### Current status
 
-- **Working features:** milestone 1 live pose tracker — opens the camera, runs YOLO11n-Pose on CUDA (with CPU fallback via `--device cpu`), draws the detected skeleton and keypoints, shows FPS and inference time, and exits cleanly on Q/Escape. 21 unit tests cover config, geometry, timing, and rendering.
-- **Verified:** torch 2.11.0+cu128, `torch.cuda.is_available() == True` on RTX 3060 Laptop GPU; YOLO11n-Pose loads and detects a person in a test image at ~11 ms/frame on CUDA; webcam reads real frames; the full app loop ran on the desktop display without errors.
-- **Known limitations:** live tracker only — no reference choreography, scoring, or game UI yet. `pygame` proper has no Python 3.14 wheels, so `pygame-ce` is used. Skeleton quality on a moving dancer still needs an on-person check.
+- **Working features:** (1) live pose tracker — camera, CUDA YOLO11n-Pose, skeleton overlay, FPS/inference HUD, clean quit. (2) practice mode — `--source` loads a reference video, extracts and caches pose samples, plays each move looping on a side-by-side panel, scores your pose (0–100%) against a nearby reference window, and shows one stable correction hint. `--moves` loads manual move segmentation from JSON; `--mirror` flips the reference for selfie-view matching.
+- **Verified:** torch 2.11.0+cu128, `torch.cuda.is_available() == True` on RTX 3060 Laptop GPU; YOLO11n-Pose ~11 ms/frame on CUDA; webcam reads real frames; reference extraction ran on a synthetic 6 s clip (60/60 samples detected) with cache-hit on second run; practice mode ran end-to-end on the desktop display; 55 unit tests pass.
+- **Known limitations:** reference shows as a skeleton, not the decoded video frames; move segmentation is manual (no auto-segmentation); scoring is positional keypoint distance, not yet per-joint-angle feedback; no scoring history, combos, or level progression yet (game layer pending). `pygame-ce` used instead of `pygame` (no Python 3.14 wheels). Accuracy on a fast-moving dancer still needs an on-person check.
 - **Libraries, APIs, and datasets used:** [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) (AGPL-3.0; also used for `yolo11n-pose.pt` weights and the `bus.jpg` test image), [PyTorch](https://pytorch.org), [OpenCV](https://opencv.org), [NumPy](https://numpy.org), [pygame-ce](https://pyga.me), [pytest](https://pytest.org).
 
 See [AI_USAGE.md](AI_USAGE.md) for AI assistance and [CHANGELOG.md](CHANGELOG.md) for the development record.

@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T22:15:00+0530 — Milestone 2: reference choreography + practice mode
+
+- Changed: Added `reference.py` (ReferenceChoreography model, offline pose extraction at configurable `--sample-fps`, `.npz` cache with staleness checks on video size/mtime, sample rate, model, confidence, and cache version), `moves.py` (JSON move segmentation with validation), `scoring.py` (confidence-aware normalized pose scoring, window matching, worst-mismatch + direction hints, mirroring, score smoothing, correction hysteresis), `practice.py` (side-by-side practice loop with per-move looping and N/P/Q controls). New CLI flags: `--source`, `--moves`, `--sample-fps`, `--window`, `--mirror`, `--cache-dir`. `.gitignore` now covers `cache/`; 34 new tests. Fixed two bugs caught by tests: cache compared the stored sample rate against itself instead of the requested one, and the correction tracker delayed the first correction by `hold_frames`.
+- Why: Second milestone — turn the verified tracker into a usable practice demo: load a dance video, learn it move by move, get scored and corrected.
+- Validation: `python -m pytest tests/` → 55 passed; extraction ran on a generated 6 s pan clip (60/60 samples detected a person, cached to `cache/`); second run hit the cache; practice mode ran ~12 s on the desktop display on CUDA without errors; `--help` renders all options.
+- Limitations: Reference displays as a skeleton, not video frames; moves are manual only; extraction verified on a synthetic clip and webcam reads verified, but live practice against a real dancing person is still untested.
+
 ## 2026-10-24T22:05:00+0530 — Milestone 1: live pose tracker
 
 - Changed: Added the `mission_im_dancable` package (`config`, `camera`, `pose`, `geometry`, `timing`, `render`, `app`, `__main__`) with a `python -m mission_im_dancable` entry point; 21 unit tests under `tests/`; `requirements.txt`, `requirements-torch-cuda.txt`, `requirements-torch-cpu.txt`; `.gitignore` rules for model weights and local media; populated the README project overview, run, and troubleshooting sections. Model weights live in `models/` (gitignored); Ultralytics `bus.jpg` moved to `tests/assets/`.
