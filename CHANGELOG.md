@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T00:58:53+05:30 — Drive Amy from the reference skeleton
+
+- Changed: `avatar.py` maps confidence-filtered YOLO17 reference samples to planar directions for Amy's torso, neck, arms, and legs, plus limited hip translation; `avatar_render.py` applies those directions to the skinned Mixamo rig in background Blender and writes one transparent PNG per sampled timestamp. Renders are cached under `cache/amy/` using pose, rig, and confidence fingerprints; incomplete renders are ignored. `ui/screens.py` generates video-specific frames in the selection worker and falls back to the skeleton on failure; `ui/sprite.py` selects frames by reference timestamps (pause, retries, and mirror included), not the old canned 48-frame loop. Persisted Amy preference now loads correctly in `persist.py`. Added `tests/test_avatar.py` and a preference regression test.
+- Why: The user reported Amy was T-posed/unrelated to the dance video. Video-specific bone targets replace the decorative loop as the game's reference visualization without changing pose scoring or camera inference.
+- Validation: `compileall` and `pytest tests/` passed (133 tests). Headless Blender rendered all 118 samples from `dance_1.mp4` (320x400 RGBA), with no empty/cropped frames; frames 11 and 41 have different poses. Pygame panel drew cached frame 11 at 1 s and frame 61 at 6 s. `--game` opened on the desktop display for 8 s without errors (no interactive playthrough).
+- Limitations: Planar single-camera approximation, not full 3D motion capture: occlusion, depth, spins, contact, and fingers are not recovered. Full rendering happens once per video/settings before play and can take time. Scoring against a real dancer is still unverified; video and generated assets remain gitignored.
+
 ## 2026-10-25T00:20:00+0530 — Amy sprite reference (milestone 1)
 
 - Changed: Added `ui/sprite.py` — `SpriteAnim`/`load_frames`/`frame_index_at` play pre-rendered Blender frames, frame index derived from the shared session clock (pause/seek/restart free). PlayScreen draws Amy in the reference panel when `settings["amy"]` (default on, Settings toggle) and frames exist; neon skeleton is the fallback. Rendered 48 transparent frames (320×400 RGBA, EEVEE, platform hidden) from `mission_dancer.blend` via headless `blender -b`. Removed the earlier geometric dancer attempt (`ui/dancer.py`, `--avatar`, tests) — superseded by real Amy. `assets/` added to .gitignore (28MB blend + frames stay local). 6 new tests.

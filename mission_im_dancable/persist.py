@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "camera_index": 0,
     "mirror": True,
     "last_video": "",
+    "amy": True,
 }
 
 

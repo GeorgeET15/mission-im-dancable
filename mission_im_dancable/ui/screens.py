@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pygame
 
+from ..avatar import render_choreography
 from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
@@ -65,8 +66,8 @@ class AppContext:
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
         self.beats = None  # BeatGrid set after analyze; None = no beat sync
-        self.amy = None  # SpriteAnim for the Amy reference; skeleton fallback
-        self._amy_checked = False
+        self.amy = None  # Only reference-driven frames; skeleton otherwise
+        self.avatar_dir: Path | None = None
         self.t = 0.0
         self.particles = theme.Particles()
         self.quit = False
@@ -236,6 +237,9 @@ class SelectScreen(Screen):
         self.progress = -1.0
         self.choreo = None
         self.moves = None
+        self._avatar_dir = None
+        self._avatar_error = ""
+        self._thread = None
         self.error = ""
         self.bar = ProgressBar(pygame.Rect(60, 560, 700, 14), color=theme.PINK)
         self._synced = False
@@ -273,6 +277,8 @@ class SelectScreen(Screen):
         self.status, self.status_color = msg, color
 
     def _analyze(self, ctx) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return  # one extraction/render per selection; no competing Blender jobs
         path = Path(self.field.text.strip()).expanduser()
         if not path.is_file():
             self._set_status(f"file not found: {path}", theme.MISS)
@@ -284,6 +290,12 @@ class SelectScreen(Screen):
             return
         ctx.video_path = path
         ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
+        ctx.amy = None
+        ctx.avatar_dir = None
+        self.choreo = None
+        self.moves = None
+        self._avatar_dir = None
+        self._avatar_error = ""
         self.btn_start.enabled = False
         self.progress = 0.0
         self._set_status("analyzing choreography…", theme.CYAN)
@@ -313,6 +325,14 @@ class SelectScreen(Screen):
                 self.error = str(exc)
                 return
             ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
+            if ctx.settings.get("amy", True):
+                try:
+                    self._avatar_dir = render_choreography(
+                        choreo, ctx.cfg.cache_dir, ctx.cfg.confidence,
+                        on_status=lambda message: self._set_status(message, theme.CYAN),
+                    )
+                except RuntimeError as exc:
+                    self._avatar_error = str(exc)
             self.choreo, self.moves = choreo, moves
 
         self._thread = threading.Thread(target=work, daemon=True)
@@ -413,7 +433,14 @@ class SelectScreen(Screen):
                 self._set_status("no person detected in the video — try another clip", theme.MISS)
                 self.btn_start.enabled = False
             else:
-                self._set_status("ready — press START DANCING", theme.GOOD)
+                ctx.avatar_dir = self._avatar_dir
+                ctx.amy = load_frames(pygame, self._avatar_dir) if self._avatar_dir else None
+                if ctx.amy is not None:
+                    self._set_status("Amy follows the extracted reference poses — START DANCING", theme.GOOD)
+                elif self._avatar_error:
+                    self._set_status(f"Amy unavailable ({self._avatar_error[:65]}); using skeleton", theme.DIM)
+                else:
+                    self._set_status("ready with reference skeleton — START DANCING", theme.GOOD)
                 self._fill_info(ctx.video_path)
 
     def draw(self, ctx, surf) -> None:
@@ -494,9 +521,6 @@ class PlayScreen(Screen):
             self.session = GameSession(ctx.moves)
         else:
             self.session = PracticeSession(ctx.choreo, ctx.moves, ctx.cfg.window_s)
-        if not ctx._amy_checked:
-            ctx._amy_checked = True
-            ctx.amy = load_frames(pygame)  # None → skeleton fallback
 
     def exit(self) -> None:
         if getattr(self, "cap", None) is not None:
@@ -597,8 +621,8 @@ class PlayScreen(Screen):
             pygame.draw.rect(surf, theme.PANEL, r)
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
         t = self.session.time
-        if ctx.amy is not None and ctx.settings.get("amy", True):
-            ctx.amy.draw(pygame, surf, ref_rect, t)
+        if getattr(ctx, "amy", None) is not None and ctx.settings.get("amy", True):
+            ctx.amy.draw(pygame, surf, ref_rect, t, mirror=ctx.mirror)
         else:
             pose = pose_at(ctx.choreo, t)
             if pose is not None and pose[:, 2].max() > 0:
@@ -800,7 +824,7 @@ class SettingsScreen(Screen):
             self.tgl_amy.value = not self.tgl_amy.value
             ctx.settings["amy"] = self.tgl_amy.value
             if self.tgl_amy.value and ctx.amy is None:
-                ctx.amy = load_frames(pygame)
+                ctx.amy = load_frames(pygame, ctx.avatar_dir) if ctx.avatar_dir else None
         elif action == "cam-":
             self.cam = max(0, self.cam - 1)
         elif action == "cam+":
@@ -848,7 +872,7 @@ class SettingsScreen(Screen):
         surf.blit(val, val.get_rect(center=(245, 412)))
         self.btn_cam_m.draw(pygame, surf, ctx.fonts["med"], ctx.t)
         self.btn_cam_p.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        note = ctx.fonts["sm"].render("camera applies next time it opens · amy needs rendered frames", True, theme.DIM)
+        note = ctx.fonts["sm"].render("camera applies on next open · analyze a video to animate Amy", True, theme.DIM)
         surf.blit(note, (120, 450))
         self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
 
@@ -878,4 +902,3 @@ class ScoresScreen(Screen):
             surf.blit(ctx.fonts["sm"].render(line, True, color), (120, y))
             y += 32
         self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-
