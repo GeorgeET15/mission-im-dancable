@@ -24,7 +24,7 @@ def _choreo(video_path, n_samples=5):
         sample_fps=10.0,
         timestamps=np.arange(n_samples) / 10.0,
         keypoints=kpts,
-        model_name="yolo11n-pose.pt",
+        model_name="yolo11l-pose.pt",
         video_size=stat.st_size,
         video_mtime_ns=stat.st_mtime_ns,
     )
@@ -54,9 +54,9 @@ def test_cache_roundtrip(tmp_path):
     video.write_bytes(b"fake-video-data")
     choreo = _choreo(video)
     cache_path = cache_path_for(video, tmp_path / "cache")
-    save_cache(choreo, cache_path, "yolo11n-pose.pt", confidence=0.3)
+    save_cache(choreo, cache_path, "yolo11l-pose.pt", confidence=0.3)
 
-    loaded = load_cache(cache_path, video, 10.0, "yolo11n-pose.pt", 0.3)
+    loaded = load_cache(cache_path, video, 10.0, "yolo11l-pose.pt", 0.3)
     assert loaded is not None
     assert loaded.video_fps == pytest.approx(30.0)
     assert np.array_equal(loaded.timestamps, choreo.timestamps)
@@ -68,16 +68,16 @@ def test_cache_rejects_stale_inputs(tmp_path):
     video.write_bytes(b"fake-video-data")
     choreo = _choreo(video)
     cache_path = cache_path_for(video, tmp_path / "cache")
-    save_cache(choreo, cache_path, "yolo11n-pose.pt", confidence=0.3)
+    save_cache(choreo, cache_path, "yolo11l-pose.pt", confidence=0.3)
 
     # different extraction settings or model → stale
-    assert load_cache(cache_path, video, 15.0, "yolo11n-pose.pt", 0.3) is None
+    assert load_cache(cache_path, video, 15.0, "yolo11l-pose.pt", 0.3) is None
     assert load_cache(cache_path, video, 10.0, "other-model.pt", 0.3) is None
-    assert load_cache(cache_path, video, 10.0, "yolo11n-pose.pt", 0.5) is None
+    assert load_cache(cache_path, video, 10.0, "yolo11l-pose.pt", 0.5) is None
 
     # video file modified → stale
     video.write_bytes(b"edited-video-data")
-    assert load_cache(cache_path, video, 10.0, "yolo11n-pose.pt", 0.3) is None
+    assert load_cache(cache_path, video, 10.0, "yolo11l-pose.pt", 0.3) is None
 
 
 def test_cache_missing_and_corrupt(tmp_path):
@@ -96,7 +96,7 @@ def test_cache_version_bump_invalidates(tmp_path):
     video.write_bytes(b"fake-video-data")
     choreo = _choreo(video)
     cache_path = cache_path_for(video, tmp_path / "cache")
-    save_cache(choreo, cache_path, "yolo11n-pose.pt", 0.3)
+    save_cache(choreo, cache_path, "yolo11l-pose.pt", 0.3)
 
     # simulate an incompatible cache format from a previous version
     data = np.load(cache_path)
@@ -105,4 +105,4 @@ def test_cache_version_bump_invalidates(tmp_path):
     meta = json.loads(str(data["meta"]))
     meta["cache_version"] = CACHE_VERSION + 1
     np.savez(cache_path, meta=json.dumps(meta), timestamps=data["timestamps"], keypoints=data["keypoints"])
-    assert load_cache(cache_path, video, 10.0, "yolo11n-pose.pt", 0.3) is None
+    assert load_cache(cache_path, video, 10.0, "yolo11l-pose.pt", 0.3) is None

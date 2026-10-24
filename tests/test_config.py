@@ -11,7 +11,7 @@ def test_parse_args_defaults():
         camera_index=0,
         frame_width=1280,
         frame_height=720,
-        model_path=Path("models/yolo11n-pose.pt"),
+        model_path=Path("models/yolo11l-pose.pt"),
         device="auto",
         confidence=0.3,
     )

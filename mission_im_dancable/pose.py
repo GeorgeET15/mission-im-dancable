@@ -23,14 +23,14 @@ class PoseResult:
 
 
 class PoseTracker:
-    """Loads YOLO11n-Pose once and runs per-frame inference."""
+    """Loads YOLO11-Pose once and runs per-frame inference."""
 
     def __init__(self, model_path: Path | str, device: str, confidence: float) -> None:
         model_path = Path(model_path)
         if not model_path.is_file():
             raise FileNotFoundError(
                 f"Model weights not found at {model_path}. "
-                "Download yolo11n-pose.pt or pass --model PATH."
+                "Download yolo11l-pose.pt or pass --model PATH."
             )
         from ultralytics import YOLO
 
@@ -82,7 +82,3 @@ class PoseTracker:
         )
         keypoints = np.concatenate([xy, conf[:, None]], axis=1)
         return PoseResult(keypoints=keypoints, inference_ms=elapsed_ms)
-
-    def close(self) -> None:
-        """Drop the model reference so a benchmark worker can release it."""
-        self._model = None

@@ -26,9 +26,9 @@ Participate solo or in a team of up to 4. Remove unused rows.
 - **Required environment variable names:** None.
 - **Start command:** `python -m mission_im_dancable`
 - **Demo walkthrough:** `python -m mission_im_dancable --game` — arcade UI: LET'S DANCE → pick/type a video → ANALYZE → START DANCING → perform each move (SPACE to begin, R retry, P pause) → results + grade. Fallbacks: `--preview --source X` (animated reference), `--source X` (OpenCV practice), no args (live tracker).
-- **Checks performed and results:** CUDA verified on RTX 3060; YOLO11n-Pose ~11 ms/frame; 103/103 unit tests pass; extraction + caching verified on real clip `dance_1.mp4` (114/118 detections); tracker, practice, preview, and arcade UI all ran on the desktop display. A full game run against a real dancer is untested.
+- **Checks performed and results:** CUDA verified on RTX 3060; YOLO11l-Pose ~14 ms/frame (~72 FPS); 133/133 unit tests pass; extraction + caching verified on real clip `dance_1.mp4`; tracker, practice, preview, and arcade UI all ran on the desktop display. A full game run against a real dancer is untested.
 - **Known limitations or incomplete features:** Real-dancer playthrough unverified; reference shown as skeleton rather than video pixels; move segmentation is manual. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
-- **Libraries, APIs, and public datasets used:** Ultralytics YOLO11 (AGPL-3.0) + `yolo11n-pose.pt` weights + `bus.jpg` sample image; PyTorch cu128; OpenCV; NumPy; pygame-ce; pytest.
+- **Libraries, APIs, and public datasets used:** Ultralytics YOLO11 (AGPL-3.0) + `yolo11l-pose.pt` weights + `bus.jpg` sample image; PyTorch cu128; OpenCV; NumPy; pygame-ce; pytest.
 - **AI usage record:** [AI_USAGE.md](AI_USAGE.md)
 - **Development change log:** [CHANGELOG.md](CHANGELOG.md)
 

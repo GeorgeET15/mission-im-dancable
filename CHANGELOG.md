@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T03:00:00+05:30 — Single-model cleanup: keep only YOLO11l-Pose
+
+- Changed: Default and only gameplay model is now `yolo11l-pose.pt` (`DEFAULT_MODEL_PATH`, `--model` still accepted for explicit paths). Removed all benchmark infrastructure: `mediapipe_pose.py`, `benchmark.py`, `benchmark_run.py`, `_bench_worker.py`, `tests/test_benchmark.py`, the `--benchmark-pose`/`--visualize-pose`/`--pose-backends`/`--max-frames` flags, `PoseTracker.close()`, benchmark gitignore entries, the `.bench-venv`, and `output/pose_benchmark/` artifacts. Other weights moved outside the repo to `~/mission-im-dancable-model-archive/` (yolo11n/11m/11x/26m/26l + pose_landmarker_heavy.task, all SHA-256 verified before removal). `PoseTracker.predict` keeps `inference_mode` + CUDA sync timing.
+- Why: Simplify to one model, one gameplay path — benchmarks proved yolo11l is the best measured option (100% detection on dance_1.mp4, ~72 FPS on RTX 3060) so it becomes the default.
+- Validation: `pytest tests/` → 133 passed. `sha256sum` verified retained 11l (61921abe…) and all 6 archived files before deletion. `git ls-files models/` empty — no weights tracked.
+- Limitations: Cache fingerprints include the model name, so first-run re-extraction happens once per video; `--model` can still point at other weights by explicit user choice.
+
 ## 2026-10-25T02:30:00+05:30 — YOLO pose variant benchmark (11m/11l/11x/26m/26l)
 
 - Changed: `benchmark.py` gained `yolo-<variant>` backend resolution (`models/yolo<variant>-pose.pt`, explicit `--model` still wins), per-model SHA-256 + post-warmup CUDA-device verification (predictor's inner module), missing-frame index recording, inference-phase GPU-peak reset; `pose.py` wraps predict in `torch.cuda.synchronize()` for honest GPU timing; `benchmark_run.py` forwards `--model` only when explicitly set. Downloaded official v8.4.0 weights for yolo11m/l/x-pose and yolo26m/l-pose (gitignored). 4 new tests.
