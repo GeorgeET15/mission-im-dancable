@@ -99,6 +99,9 @@ class TextField:
         self.placeholder = placeholder
         self.focused = False
 
+    def contains(self, pos) -> bool:
+        return self.rect.collidepoint(pos)
+
     def handle_key(self, key: int, unicode: str) -> bool:
         if not self.focused:
             return False
