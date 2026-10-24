@@ -1,0 +1,8 @@
+{
+  "moves": [
+    {"name": "move 1", "start": 0.0, "end": 3.0},
+    {"name": "move 2", "start": 3.0, "end": 6.0},
+    {"name": "move 3", "start": 6.0, "end": 9.0},
+    {"name": "move 4", "start": 9.0, "end": 11.8}
+  ]
+}

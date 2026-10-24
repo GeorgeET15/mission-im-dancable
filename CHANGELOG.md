@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T22:50:00+0530 — Dance-arcade pygame UI
+
+- Changed: Replaced the mission-control `game_ui.py` with a `ui/` package — `theme.py` (neon palette, gradient, dance floor, spotlights, equalizer, particles, glow text), `widgets.py` (Button/Toggle/ProgressBar/TextField/FocusGroup), `nav.py` (pygame-free Navigator with fade + input lock), `screens.py` (Home/Select/Play/Results/Settings/Scores + AppContext), `app.py` (`run_arcade` with resizable letterboxed canvas). Added `persist.py` (settings + high scores under XDG config/data dirs), `Judgement`/`judge()`/`grade_for()` in game.py, `on_progress` callback for extraction (background-threaded on the select screen). `--game` no longer requires `--source` — the video is picked in the UI. 8 new tests.
+- Why: Turn the working prototype into a real rhythm game: home → dance select → play → results with score, combo, judgements, and persistence.
+- Validation: `python -m pytest tests/` → 103 passed (navigator transitions + input lock, settings/scores persistence, judgement/grade mapping). `--game --source dance_1.mp4` ran ~15 s on the display with no errors; menu navigation and clicks unverified beyond code review.
+- Limitations: Interactive menu/playthrough untested (no display input automation); tkinter absent so browse uses the path-field fallback; practice mode inside the arcade UI mirrors the GameSession layout without scoring.
+
 ## 2026-10-24T22:30:00+0530 — Animated reference skeleton preview
 
 - Changed: Added `pose_at()` to reference.py — timestamp-based interpolation between adjacent pose samples with per-landmark missing-data handling (never invents landmarks). Added `playback.py` with `PlaybackClock` (elapsed wall-time playback: play/pause/seek/skip/restart, auto-stop at end, speed independent of tick rate). Added `preview.py` — OpenCV playback window showing the animated reference beside the live camera skeleton; SPACE pause, ←/→ seek ±2 s, R restart, ENTER hands the SAME camera into `run_practice_loop`. Refactored `run_practice` into `prepare()` + `run_practice_loop()` so preview and practice share resources (no second camera open). New flags `--preview` and `--no-cam` with cross-flag validation. 16 new tests.

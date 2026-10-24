@@ -101,14 +101,12 @@ Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video du
 
 ### Game mode (`--game`)
 
-The pygame-ce mission-control interface turns each move into an objective:
+The pygame-ce dance-arcade UI: neon-purple theme with spotlights, equalizer, and a dance floor. `python -m mission_im_dancable --game` opens the full flow:
 
-- **Flow:** BRIEFING (move intro, SPACE to begin) → ACTIVE (perform the move once) → RESULT (passed → SPACE for next objective; failed → R to retry) → MISSION COMPLETE scorecard.
-- **Controls:** SPACE/ENTER confirm · R retry (or replay after completion) · P pause · M toggle mirror · Q/Esc quit.
-- **Scoring:** your pose is evaluated at fixed intervals (every 0.25 s of move time — points do **not** scale with frame rate). Each evaluation with accuracy ≥ 60% scores 100 pts × the combo multiplier (×1 rising to ×5 every 8 combo). A miss, low-confidence pose, or tracking loss breaks the combo. Duplicated camera frames never count as extra events.
-- **Passing a move:** mean accuracy ≥ 60% **and** at least 50% of evaluations reliable — one lucky frame can't carry a move.
-- **Feedback:** the hint panel shows the single largest reliable mismatch — a positional fix (`left wrist: move up-left`) or a joint-angle fix (`left elbow: straighten more`), held stable by hysteresis.
-- Defaults live in `mission_im_dancable/game.py` (`GameConfig`); the OpenCV practice mode stays available by omitting `--game`.
+- **Screens:** HOME → CHOOSE YOUR DANCE (type a path or pick a detected video, ANALYZE extracts choreography in the background with a progress bar, `<stem>.moves.json` auto-detected) → gameplay (reference vs live skeleton, PERFECT/GREAT/MISS popups, combo milestones, particles) → RESULTS (grade S/A/B/C/F, per-move stats, retry / another dance / home). HIGH SCORES persists top runs locally; SETTINGS stores camera index + mirror default in the user config dir.
+- **Controls:** click or arrows/WS + ENTER on menus · SPACE confirm/start · R retry · P pause · M mirror · Q/Esc back · window is resizable.
+- **Scoring:** unchanged from the GameSession — evaluations at fixed 0.25 s intervals (FPS-independent), 100 pts × combo multiplier (×1→×5 every 8 combo), misses break combo, duplicate frames never count. Passing needs mean accuracy ≥ 60% + ≥ 50% reliable evals.
+- Native file dialog used if tkinter exists (it doesn't here) — fallback is the path field + detected-video buttons.
 
 ### Model weights
 

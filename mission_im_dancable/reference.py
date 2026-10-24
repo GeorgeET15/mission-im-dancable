@@ -121,6 +121,7 @@ def extract_reference(
     video_path: Path,
     sample_fps: float,
     progress_every: int = 25,
+    on_progress=None,
 ) -> ReferenceChoreography:
     """Run pose inference over a video at the requested sample rate."""
     cap = cv2.VideoCapture(str(video_path))
@@ -151,7 +152,9 @@ def extract_reference(
                     if result is not None
                     else np.zeros((NUM_KEYPOINTS, 3), dtype=np.float32)
                 )
-                if progress_every and len(timestamps) % progress_every == 0:
+                if on_progress is not None:
+                    on_progress(len(timestamps), len(wanted))
+                elif progress_every and len(timestamps) % progress_every == 0:
                     print(
                         f"  extracted {len(timestamps)}/{len(wanted)} pose samples...",
                         flush=True,
@@ -268,6 +271,7 @@ def load_or_extract(
     cache_dir: Path,
     confidence: float,
     model_name: str,
+    on_progress=None,
 ) -> ReferenceChoreography:
     """Return a cached extraction when fresh, otherwise extract and cache."""
     cache_path = cache_path_for(video_path, cache_dir)
@@ -278,7 +282,7 @@ def load_or_extract(
 
     start = time.perf_counter()
     print(f"Extracting reference poses from {video_path} at {sample_fps:g} fps...")
-    choreo = extract_reference(tracker, video_path, sample_fps)
+    choreo = extract_reference(tracker, video_path, sample_fps, on_progress=on_progress)
     choreo.model_name = model_name
     elapsed = time.perf_counter() - start
     print(

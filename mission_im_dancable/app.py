@@ -16,11 +16,11 @@ WINDOW_NAME = "Mission Im-Dancable — live pose tracker"
 
 def run(cfg: AppConfig) -> int:
     """Run the camera + pose loop until the user quits. Returns an exit code."""
-    if cfg.source is not None:
-        if cfg.game:
-            from .game_ui import run_game
+    if cfg.game:
+        from .ui.app import run_arcade
 
-            return run_game(cfg)
+        return run_arcade(cfg)
+    if cfg.source is not None:
         if cfg.preview:
             from .preview import run_preview
 

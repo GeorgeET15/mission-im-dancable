@@ -108,7 +108,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     parser.add_argument(
         "--game",
         action="store_true",
-        help="rhythm-game mode (pygame) instead of the OpenCV practice view",
+        help="rhythm-game arcade UI (pygame); picks the video in the app",
     )
     parser.add_argument(
         "--preview",
@@ -132,8 +132,6 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         parser.error("--window must be >= 0")
     if args.moves and not args.source:
         parser.error("--moves requires --source")
-    if args.game and not args.source:
-        parser.error("--game requires --source VIDEO")
     if args.preview and not args.source:
         parser.error("--preview requires --source VIDEO")
     if args.preview and args.game:

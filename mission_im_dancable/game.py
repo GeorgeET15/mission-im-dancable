@@ -20,6 +20,32 @@ class GamePhase(enum.Enum):
     COMPLETE = "complete"          # mission finished: scorecard
 
 
+class Judgement(enum.Enum):
+    PERFECT = "PERFECT"
+    GREAT = "GREAT"
+    MISS = "MISS"
+
+
+def judge(
+    accuracy: float | None,
+    reliable: bool,
+    great: float = 0.6,
+    perfect: float = 0.85,
+) -> Judgement:
+    """Map one committed evaluation to a rhythm-game judgement."""
+    if not reliable or accuracy is None or accuracy < great:
+        return Judgement.MISS
+    return Judgement.PERFECT if accuracy >= perfect else Judgement.GREAT
+
+
+def grade_for(mean_accuracy: float) -> str:
+    """Playful grade letter for a finished run."""
+    for cutoff, letter in ((0.90, "S"), (0.75, "A"), (0.60, "B"), (0.45, "C")):
+        if mean_accuracy >= cutoff:
+            return letter
+    return "F"
+
+
 @dataclass(frozen=True)
 class GameConfig:
     eval_interval: float = 0.25    # seconds between committed evaluations
