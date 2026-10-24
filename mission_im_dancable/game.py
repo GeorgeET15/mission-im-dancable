@@ -16,6 +16,7 @@ from .moves import Move
 class GamePhase(enum.Enum):
     BRIEFING = "briefing"          # move intro, waits for player ready
     ACTIVE = "active"              # performing the move once through
+    GRACE = "grace"                # move time over but failing: last-chance window
     RESULT = "result"              # move finished: passed / retry
     COMPLETE = "complete"          # mission finished: scorecard
 
@@ -55,6 +56,7 @@ class GameConfig:
     base_points: int = 100         # points per successful evaluation
     combo_step: int = 8            # combo count per +1 multiplier
     max_multiplier: int = 5
+    grace_seconds: float = 5.0     # extra time to recover a failing move (0 = off)
 
     def __post_init__(self) -> None:
         if self.eval_interval <= 0:
@@ -67,6 +69,8 @@ class GameConfig:
             raise ValueError("min_reliable_fraction must be in [0, 1]")
         if self.base_points <= 0 or self.combo_step <= 0 or self.max_multiplier <= 0:
             raise ValueError("points/combo_step/max_multiplier must be positive")
+        if self.grace_seconds < 0:
+            raise ValueError("grace_seconds must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,7 @@ class GameSession:
         self._last_now: float | None = None
         self._last_frame_id: int | None = None
         self._last_interval = -1
+        self._grace_deadline = 0.0
 
     @property
     def move(self) -> Move:
@@ -149,6 +154,13 @@ class GameSession:
         if self.move.duration <= 0:
             return 1.0
         return min(max((self.time - self.move.start) / self.move.duration, 0.0), 1.0)
+
+    @property
+    def grace_remaining(self) -> float:
+        """Seconds left in the completion window; 0 outside GRACE."""
+        if self.phase != GamePhase.GRACE:
+            return 0.0
+        return max(0.0, self._grace_deadline - self.time)
 
     # -- state transitions -------------------------------------------------
 
@@ -184,7 +196,7 @@ class GameSession:
             self._last_interval = -1
 
     def toggle_pause(self) -> None:
-        if self.phase == GamePhase.ACTIVE:
+        if self.phase in (GamePhase.ACTIVE, GamePhase.GRACE):
             self.paused = not self.paused
 
     # -- per-frame update ---------------------------------------------------
@@ -205,7 +217,7 @@ class GameSession:
         if accuracy is not None:
             self.current_accuracy = accuracy
 
-        if self.phase != GamePhase.ACTIVE or self.paused:
+        if self.phase not in (GamePhase.ACTIVE, GamePhase.GRACE) or self.paused:
             self._last_now = None
             return None
 
@@ -238,8 +250,15 @@ class GameSession:
         else:
             self.combo = 0
 
-        if self.time >= self.move.end:
-            self._finish_move()
+        if self.phase == GamePhase.ACTIVE and self.time >= self.move.end:
+            if self._would_pass() or self.config.grace_seconds <= 0:
+                self._finish_move()
+            else:  # failing at move end → last-chance window, not instant fail
+                self.phase = GamePhase.GRACE
+                self._grace_deadline = self.time + self.config.grace_seconds
+        elif self.phase == GamePhase.GRACE:
+            if self._would_pass() or self.time >= self._grace_deadline:
+                self._finish_move()
 
         return EvalEvent(hit=hit, accuracy=accuracy, points=points, combo=self.combo)
 
@@ -247,14 +266,20 @@ class GameSession:
         multiplier = min(1 + self.combo // self.config.combo_step, self.config.max_multiplier)
         return self.config.base_points * multiplier
 
+    def _would_pass(self) -> bool:
+        evals = self._acc.evaluations
+        if evals == 0:
+            return False
+        mean = self._acc.accuracy_sum / self._acc.reliable if self._acc.reliable else 0.0
+        return (
+            self._acc.reliable / evals >= self.config.min_reliable_fraction
+            and mean >= self.config.pass_threshold
+        )
+
     def _finish_move(self) -> None:
         evals = self._acc.evaluations
         mean_acc = self._acc.accuracy_sum / self._acc.reliable if self._acc.reliable else 0.0
-        passed = (
-            evals > 0
-            and self._acc.reliable / evals >= self.config.min_reliable_fraction
-            and mean_acc >= self.config.pass_threshold
-        )
+        passed = self._would_pass()
         self.last_result = MoveResult(
             name=self.move.name,
             passed=passed,

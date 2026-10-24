@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T03:40:00+05:30 — Full-dance WATCH mode + 5s move-completion window
+
+- Changed: New `WatchScreen` (pygame) plays the whole choreography skeleton end-to-end via `PlaybackClock` — SPACE pause, arrows seek, R restart, M mirror, ENTER starts dancing; `WATCH` button on the select screen enabled after analyze. `GamePhase.GRACE` + `GameConfig.grace_seconds` (default 5 s): when a move ends while failing, the session enters a countdown window instead of instant MOVE FAILED — recovery during the window passes early; `grace_seconds=0` restores old behavior. Play screen shows a "COMPLETE THE MOVE — Xs" banner during the window.
+- Why: User request — view the full dance before playing; soften abrupt per-move failure.
+- Validation: `pytest tests/` → 122 passed (6 new grace tests incl. early pass, expiry, pause, retry, grace=0; 3 older fail-path tests pinned to grace_seconds=0). UI wiring reviewed; not yet exercised on the live display.
+- Limitations: GRACE prompts only in performance mode (PracticeSession unchanged); watch screen shows the reference only, no camera.
+
 ## 2026-10-25T03:20:00+05:30 — Remove the 3D dancer (skeleton-only gameplay)
 
 - Changed: Deleted `avatar.py`, `avatar_render.py`, `ui/sprite.py`, `tests/test_avatar.py`, `tests/test_sprite.py`. Removed from `ui/screens.py`: `render_choreography`/`load_frames` imports, `ctx.amy`/`ctx.avatar_dir`, the analyze worker's Blender render call, the Amy-vs-skeleton branch in the play screen (skeleton-only now), and the Settings "AMY sprite reference" toggle. `persist.py` default settings no longer include `amy` (old saved keys are harmlessly ignored). `assets/blender/` contents (`.blend`, `.blend1`, rendered frames, preview/check PNGs) moved to `~/mission-im-dancable-model-archive/blender/`; `cache/amy/` deleted.

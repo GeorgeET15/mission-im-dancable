@@ -107,7 +107,7 @@ def test_move_pass_and_progression():
 
 
 def test_failed_move_must_retry_not_skip():
-    s = _session()
+    s = _session(grace_seconds=0.0)  # instant-fail semantics
     s.start_move()
     _run_active(s, accuracy=0.1)  # everything misses
     assert s.phase == GamePhase.RESULT
@@ -122,7 +122,7 @@ def test_failed_move_must_retry_not_skip():
 
 
 def test_fully_unreliable_move_fails():
-    s = _session()
+    s = _session(grace_seconds=0.0)  # instant-fail semantics
     s.start_move()
     _run_active(s, accuracy=None, reliable=False)
     assert s.last_result is not None
@@ -163,7 +163,7 @@ def test_pause_freezes_time_and_evals():
 
 
 def test_retry_resets_interval_state():
-    s = _session()
+    s = _session(grace_seconds=0.0)  # instant-fail semantics
     s.start_move()
     _run_active(s, accuracy=0.1)
     s.retry_move()

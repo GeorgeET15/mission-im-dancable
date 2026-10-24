@@ -18,6 +18,7 @@ from ..game import GamePhase, GameSession, grade_for, judge, Judgement
 from ..geometry import SKELETON_EDGES
 from ..moves import MovesFileError, default_moves, load_moves
 from ..persist import add_score, load_scores, load_settings, save_settings
+from ..playback import PlaybackClock
 from ..pose import PoseTracker
 from ..practice import PracticeSession
 from ..reference import (
@@ -226,6 +227,7 @@ class SelectScreen(Screen):
         self.tgl_mirror = Toggle(pygame.Rect(60, 420, 400, 30), "mirror choreography", "mirror", False)
         self.btn_back = Button(pygame.Rect(60, 640, 160, 48), "BACK", "back")
         self.btn_browse = Button(pygame.Rect(230, 640, 160, 48), "BROWSE…", "browse")
+        self.btn_watch = Button(pygame.Rect(400, 640, 160, 48), "WATCH", "watch", enabled=False)
         self.video_buttons: list[Button] = []
         self.status = "pick a video and press ANALYZE"
         self.status_color = theme.DIM
@@ -287,6 +289,7 @@ class SelectScreen(Screen):
         self.choreo = None
         self.moves = None
         self.btn_start.enabled = False
+        self.btn_watch.enabled = False
         self.progress = 0.0
         self._set_status("analyzing choreography…", theme.CYAN)
 
@@ -340,7 +343,8 @@ class SelectScreen(Screen):
 
     def handle_event(self, ctx, ev) -> None:
         widgets = [self.field, self.btn_analyze, self.btn_start, self.btn_back,
-                   self.btn_browse, self.tgl_mode, self.tgl_mirror, *self.video_buttons]
+                   self.btn_browse, self.btn_watch, self.tgl_mode, self.tgl_mirror,
+                   *self.video_buttons]
         if ev.type == pygame.MOUSEMOTION:
             for wdgt in widgets:
                 if hasattr(wdgt, "hovered"):
@@ -375,6 +379,9 @@ class SelectScreen(Screen):
             ctx.manager.pop()
         elif action == "browse":
             self._browse(ctx)
+        elif action == "watch":
+            ctx.choreo, ctx.moves = self.choreo, self.moves
+            ctx.manager.push(WatchScreen())
         elif action == "mode":
             self.tgl_mode.value = not self.tgl_mode.value
         elif action == "mirror":
@@ -402,7 +409,8 @@ class SelectScreen(Screen):
 
     def update(self, ctx, dt) -> None:
         self._sync(ctx)
-        for wdgt in (self.btn_analyze, self.btn_start, self.btn_back, self.btn_browse):
+        for wdgt in (self.btn_analyze, self.btn_start, self.btn_back,
+                     self.btn_browse, self.btn_watch):
             wdgt.update(dt)
         if self.error:
             self._set_status(f"error: {self.error}", theme.MISS)
@@ -415,6 +423,7 @@ class SelectScreen(Screen):
                 self._set_status("no person detected in the video — try another clip", theme.MISS)
                 self.btn_start.enabled = False
             else:
+                self.btn_watch.enabled = True
                 self._set_status("ready with reference skeleton — START DANCING", theme.GOOD)
                 self._fill_info(ctx.video_path)
 
@@ -430,6 +439,7 @@ class SelectScreen(Screen):
         self.field.draw(pygame, surf, f_sm, ctx.t)
         self.btn_analyze.draw(pygame, surf, f_med, ctx.t)
         self.btn_start.draw(pygame, surf, f_med, ctx.t)
+        self.btn_watch.draw(pygame, surf, f_med, ctx.t)
         self.tgl_mode.draw(pygame, surf, f_sm)
         self.tgl_mirror.draw(pygame, surf, f_sm)
         for b in self.video_buttons:
@@ -651,6 +661,13 @@ class PlayScreen(Screen):
             img.set_alpha(int(255 * max(0.0, 1.0 - age / POPUP_TTL)))
             surf.blit(img, img.get_rect(center=(W // 2, 90)))
         self.popups = [p for p in self.popups if ctx.t - p[2] < POPUP_TTL]
+        if perf and self.session.phase == GamePhase.GRACE:
+            warn = theme.glow_text(
+                pygame, f_big,
+                f"COMPLETE THE MOVE — {self.session.grace_remaining:.0f}s",
+                theme.MISS,
+            )
+            surf.blit(warn, warn.get_rect(center=(W // 2, 170)))
         if self.flash > 0:
             veil = pygame.Surface((W, H), pygame.SRCALPHA)
             veil.fill((*theme.CYAN, int(60 * self.flash)))
@@ -680,6 +697,63 @@ class PlayScreen(Screen):
             surf.blit(t2, t2.get_rect(center=(W // 2, 360)))
         t3 = ctx.fonts["med"].render(line3, True, theme.GOLD)
         surf.blit(t3, t3.get_rect(center=(W // 2, 430)))
+
+
+# --- WATCH -------------------------------------------------------------------
+
+
+class WatchScreen(Screen):
+    """View the whole reference choreography as one continuous skeleton."""
+
+    def enter(self) -> None:
+        self.clock: PlaybackClock | None = None
+
+    def update(self, ctx, dt) -> None:
+        if self.clock is None:
+            self.clock = PlaybackClock(ctx.choreo.duration)
+        self.clock.now(time.perf_counter())
+
+    def handle_event(self, ctx, ev) -> None:
+        if ev.type != pygame.KEYDOWN:
+            return
+        if ev.key in (pygame.K_ESCAPE, pygame.K_q):
+            ctx.manager.pop()
+        elif ev.key == pygame.K_RETURN:
+            ctx.manager.replace(PlayScreen())
+        elif ev.key == pygame.K_SPACE and self.clock is not None:
+            self.clock.toggle()
+        elif ev.key == pygame.K_LEFT and self.clock is not None:
+            self.clock.skip(-2.0)
+        elif ev.key == pygame.K_RIGHT and self.clock is not None:
+            self.clock.skip(2.0)
+        elif ev.key == pygame.K_r and self.clock is not None:
+            self.clock.restart()
+        elif ev.key == pygame.K_m:
+            ctx.mirror = not ctx.mirror
+
+    def draw(self, ctx, surf) -> None:
+        _bg(pygame, ctx, surf, ctx.t)
+        rect = (140, 110, 1000, 470)
+        pygame.draw.rect(surf, theme.PANEL, rect)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, rect, 1, border_radius=4)
+        t = self.clock.time if self.clock is not None else 0.0
+        pose = pose_at(ctx.choreo, t)
+        if pose is not None and pose[:, 2].max() > 0:
+            shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
+            fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *rect)
+            _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
+        move = next((m.name for m in ctx.moves if m.start <= t < m.end), "")
+        head = f"WATCH: {move}" if move else "WATCH THE FULL DANCE"
+        surf.blit(ctx.fonts["med"].render(head, True, theme.CYAN), (140, 60))
+        prog = min(t / max(ctx.choreo.duration, 1e-6), 1.0)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, (140, 600, 1000, 10))
+        pygame.draw.rect(surf, theme.CYAN, (140, 600, int(1000 * prog), 10))
+        if self.clock is not None and self.clock.finished:
+            done = ctx.fonts["med"].render(
+                "dance complete — ENTER to start dancing", True, theme.GOLD)
+            surf.blit(done, done.get_rect(center=(W // 2, 560)))
+        hint = "SPACE pause · ←/→ seek · R restart · M mirror · ENTER dance · Q back"
+        surf.blit(ctx.fonts["sm"].render(hint, True, theme.DIM), (140, 640))
 
 
 # --- RESULTS -----------------------------------------------------------------

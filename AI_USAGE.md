@@ -8,6 +8,8 @@ Mark human review as pending until someone has reviewed the contribution.
 
 | Date and time with timezone | Tool / model, if known | Task | Assistance and affected files | Human review / corrections | Validation and result |
 | --- | --- | --- | --- | --- | --- |
+| 2026-10-25T03:40:00+05:30 | Devin (SWE-2 High) | WATCH mode + grace window | Authored `WatchScreen` full-dance viewer + select-screen wiring; added `GamePhase.GRACE`/`grace_seconds` with early-pass and expiry logic + banner; 6 new tests. | Pending | 122/122 tests; live display check pending. |
+
 | 2026-10-25T03:20:00+05:30 | Devin (SWE-2 High) | Remove 3D dancer, skeleton-only | Deleted avatar/sprite modules + tests, unwired Amy from screens/persist, archived `.blend` + rendered assets outside repo; play screen now always draws `pose_at` skeleton. | Pending | 116/116 tests; zero amy/blender refs; gameplay not re-verified on display. |
 | 2026-10-25T03:00:00+05:30 | Devin (SWE-2 High) | Single-model cleanup (yolo11l only) | Removed benchmark/MediaPipe modules, flags, tests, `.bench-venv`, artifacts; switched default to `yolo11l-pose.pt`; archived other verified weights outside the repo; updated docs. | Pending | 133/133 tests; checksums verified before moving; one model in `models/`. |
 | 2026-10-25T02:30:00+05:30 | Devin (SWE-2 High) | YOLO pose variant benchmark | Added `yolo-<variant>` resolution, SHA-256/device verification, missing-frame indices, CUDA-sync timing, GPU-peak reset; verified official v8.4.0 weights; ran all six models on the full clip; failure-frame and overlay analysis. | Pending | 157/157 tests; measured table + 11l recommendation in README; 26m/26l showed no gain. |
