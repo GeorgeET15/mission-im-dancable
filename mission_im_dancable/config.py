@@ -25,6 +25,8 @@ class AppConfig:
     mirror: bool = False
     cache_dir: Path = Path("cache")
     game: bool = False  # pygame rhythm-game mode instead of OpenCV practice
+    preview: bool = False  # animated reference playback before practice
+    no_cam: bool = False  # preview without opening the camera
 
 
 def resolve_device(requested: str, cuda_available: bool) -> str:
@@ -108,6 +110,16 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         action="store_true",
         help="rhythm-game mode (pygame) instead of the OpenCV practice view",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="play the animated reference skeleton first; ENTER continues to practice",
+    )
+    parser.add_argument(
+        "--no-cam",
+        action="store_true",
+        help="preview the reference without opening the camera",
+    )
     args = parser.parse_args(argv)
 
     if args.width <= 0 or args.height <= 0:
@@ -122,6 +134,12 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         parser.error("--moves requires --source")
     if args.game and not args.source:
         parser.error("--game requires --source VIDEO")
+    if args.preview and not args.source:
+        parser.error("--preview requires --source VIDEO")
+    if args.preview and args.game:
+        parser.error("--preview cannot be combined with --game")
+    if args.no_cam and not args.preview:
+        parser.error("--no-cam only applies to --preview")
 
     return AppConfig(
         camera_index=args.camera,
@@ -137,4 +155,6 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         mirror=args.mirror,
         cache_dir=args.cache_dir,
         game=args.game,
+        preview=args.preview,
+        no_cam=args.no_cam,
     )

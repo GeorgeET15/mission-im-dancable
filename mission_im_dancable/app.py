@@ -21,6 +21,10 @@ def run(cfg: AppConfig) -> int:
             from .game_ui import run_game
 
             return run_game(cfg)
+        if cfg.preview:
+            from .preview import run_preview
+
+            return run_preview(cfg)
         from .practice import run_practice
 
         return run_practice(cfg)

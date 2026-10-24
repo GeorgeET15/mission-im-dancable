@@ -54,6 +54,10 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
    python -m mission_im_dancable --source path/to/dance.mp4 --moves moves.json --mirror
    ```
    The first run extracts poses at `--sample-fps` (default 10) and caches them in `cache/`; later runs reuse the cache.
+   **Preview the animated reference first:**
+   ```bash
+   python -m mission_im_dancable --preview --source path/to/dance.mp4 --moves moves.json --mirror
+   ```
    **Play it as a rhythm game (pygame UI):**
    ```bash
    python -m mission_im_dancable --game --source path/to/dance.mp4 --moves moves.json --mirror
@@ -86,6 +90,15 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
 
 Timestamps are seconds; `start`/`end` must satisfy `0 <= start < end <= video duration`. Without `--moves`, the whole video is one move.
 
+### Reference preview (`--preview`)
+
+`--preview` opens a playback window before practice: the extracted pose sequence plays back as an animated skeleton at the original video speed — driven by elapsed wall time, not frame count, so speed is correct on any machine. Adjacent samples are interpolated for smooth motion; landmarks missing from a sample are never invented (a single confident endpoint is used, or the joint is skipped).
+
+- **Controls:** SPACE pause/resume · ←/→ seek ±2 s · R restart · ENTER start practice · Q/Esc quit.
+- **Layout:** reference skeleton on the left, your live camera skeleton on the right — same camera instance used by practice mode (no second capture). `--no-cam` runs the preview without a camera.
+- **ENTER** continues straight into move-by-move practice with the same extraction, moves file, and camera.
+- Person selection: the highest-confidence detected person is tracked per frame — the tracker does not switch between multiple dancers deliberately.
+
 ### Game mode (`--game`)
 
 The pygame-ce mission-control interface turns each move into an objective:
@@ -117,9 +130,9 @@ Or pass a custom location with `--model PATH`.
 
 ### Current status
 
-- **Working features:** (1) live pose tracker — camera, CUDA YOLO11n-Pose, skeleton overlay, FPS/inference HUD, clean quit. (2) practice mode — `--source` + `--moves` gives looping move-by-move practice with match scoring and corrections (OpenCV). (3) game mode — `--game` runs the pygame mission-control UI: briefing/perform/result/scorecard flow, interval-based scoring, combo multiplier, pass/retry per move, joint-angle correction hints, pause and mirror toggle.
-- **Verified:** torch 2.11.0+cu128, `torch.cuda.is_available() == True` on RTX 3060 Laptop GPU; YOLO11n-Pose ~11 ms/frame on CUDA; webcam reads real frames; reference extraction + cache-hit verified on a synthetic 6 s clip (60/60 detections); practice mode and game mode both ran end-to-end on the desktop display; 79 unit tests pass.
-- **Known limitations:** reference shows as a skeleton, not the decoded video frames; move segmentation is manual; game-mode scoring verified by simulation tests, but a full run against a real dancing person is untested. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
+- **Working features:** (1) live pose tracker — camera, CUDA YOLO11n-Pose, skeleton overlay, FPS/inference HUD, clean quit. (2) practice mode — `--source` + `--moves` gives looping move-by-move practice with match scoring and corrections (OpenCV). (3) game mode — `--game` runs the pygame mission-control UI: briefing/perform/result/scorecard flow, interval-based scoring, combo multiplier, pass/retry per move, joint-angle correction hints, pause and mirror toggle. (4) reference preview — `--preview` plays the animated reference skeleton at original speed (interpolated, elapsed-time driven) beside the live camera, with pause/seek/restart and ENTER to continue into practice.
+- **Verified:** torch 2.11.0+cu128, `torch.cuda.is_available() == True` on RTX 3060 Laptop GPU; YOLO11n-Pose ~11 ms/frame on CUDA; webcam reads real frames; reference extraction + cache-hit verified on a synthetic 6 s clip (60/60 detections); tracker, practice, game, and preview (with and without camera) all ran end-to-end on the desktop display; 95 unit tests pass.
+- **Known limitations:** reference shows as a skeleton, not the decoded video frames; move segmentation is manual; game-mode scoring verified by simulation tests, but a full run against a real dancing person is untested; preview key controls need an interactive keypress check. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
 - **Libraries, APIs, and datasets used:** [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) (AGPL-3.0; also used for `yolo11n-pose.pt` weights and the `bus.jpg` test image), [PyTorch](https://pytorch.org), [OpenCV](https://opencv.org), [NumPy](https://numpy.org), [pygame-ce](https://pyga.me), [pytest](https://pytest.org).
 
 See [AI_USAGE.md](AI_USAGE.md) for AI assistance and [CHANGELOG.md](CHANGELOG.md) for the development record.

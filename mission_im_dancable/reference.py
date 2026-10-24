@@ -77,6 +77,37 @@ def nearest_index(choreo: ReferenceChoreography, t: float) -> int | None:
     return min(candidates, key=lambda j: abs(ts[j] - t))
 
 
+def pose_at(choreo: ReferenceChoreography, t: float) -> np.ndarray | None:
+    """Interpolated (N, 3) pose at time t seconds.
+
+    Lerps between the two bracketing samples so playback follows the dancer
+    at original speed. Per keypoint: if both endpoints are confident the
+    position and confidence are lerped; if only one endpoint has the
+    landmark it is used as-is; if neither, the row stays zeros (missing).
+    Returns None when the choreography has no samples.
+    """
+    ts = choreo.timestamps
+    if ts.size == 0:
+        return None
+    if t <= ts[0]:
+        return choreo.keypoints[0]
+    if t >= ts[-1]:
+        return choreo.keypoints[-1]
+    i1 = int(np.searchsorted(ts, t))
+    i0 = i1 - 1
+    a, b = choreo.keypoints[i0], choreo.keypoints[i1]
+    span = ts[i1] - ts[i0]
+    w = float((t - ts[i0]) / span) if span > 0 else 0.0
+    out = np.zeros_like(a)
+    both = (a[:, 2] > 0) & (b[:, 2] > 0)
+    only_a = (a[:, 2] > 0) & ~both
+    only_b = (b[:, 2] > 0) & ~both
+    out[both] = a[both] * (1.0 - w) + b[both] * w
+    out[only_a] = a[only_a]
+    out[only_b] = b[only_b]
+    return out
+
+
 def sampled_frame_indices(frame_count: int, video_fps: float, sample_fps: float) -> list[int]:
     """Frame indices to run inference on for the requested sample rate."""
     if frame_count <= 0 or video_fps <= 0 or sample_fps <= 0:

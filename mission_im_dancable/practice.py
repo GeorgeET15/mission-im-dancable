@@ -102,40 +102,56 @@ def _draw_text(img: np.ndarray, lines: list[tuple[str, tuple[int, int, int], flo
         cv2.putText(img, text, (x, y + i * step), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, int(thick), cv2.LINE_AA)
 
 
-def run_practice(cfg: AppConfig) -> int:
-    """Reference-choreography practice loop. Returns an exit code."""
+def prepare(
+    cfg: AppConfig,
+) -> tuple[PoseTracker, ReferenceChoreography, list[Move], str]:
+    """Build the tracker, reference choreography, and move list.
+
+    Raises FileNotFoundError/ReferenceVideoError/MovesFileError/OSError on
+    bad inputs; callers convert those to exit codes.
+    """
     device = resolve_device(cfg.device, torch.cuda.is_available())
     tracker = PoseTracker(cfg.model_path, device, cfg.confidence)
+    choreo = load_or_extract(
+        tracker,
+        cfg.source,
+        cfg.sample_fps,
+        cfg.cache_dir,
+        cfg.confidence,
+        model_name=cfg.model_path.name,
+    )
+    moves = (
+        load_moves(cfg.moves_path, choreo.duration)
+        if cfg.moves_path
+        else default_moves(choreo.duration)
+    )
+    return tracker, choreo, moves, device
 
+
+def run_practice(cfg: AppConfig) -> int:
+    """Reference-choreography practice loop. Returns an exit code."""
     try:
-        choreo = load_or_extract(
-            tracker,
-            cfg.source,
-            cfg.sample_fps,
-            cfg.cache_dir,
-            cfg.confidence,
-            model_name=cfg.model_path.name,
-        )
-    except (ReferenceVideoError, FileNotFoundError, OSError) as exc:
+        tracker, choreo, moves, device = prepare(cfg)
+    except (ReferenceVideoError, MovesFileError, FileNotFoundError, OSError) as exc:
         print(f"Error: {exc}")
         return 2
-
-    try:
-        moves = (
-            load_moves(cfg.moves_path, choreo.duration)
-            if cfg.moves_path
-            else default_moves(choreo.duration)
-        )
-    except MovesFileError as exc:
-        print(f"Error: {exc}")
-        return 2
-
     try:
         cap = open_camera(cfg)
     except CameraError as exc:
         print(f"Error: {exc}")
         return 2
+    return run_practice_loop(cfg, tracker, choreo, moves, cap, device)
 
+
+def run_practice_loop(
+    cfg: AppConfig,
+    tracker: PoseTracker,
+    choreo: ReferenceChoreography,
+    moves: list[Move],
+    cap: cv2.VideoCapture,
+    device: str,
+) -> int:
+    """Practice loop over an already-open camera. Releases it on exit."""
     session = PracticeSession(choreo, moves, cfg.window_s)
     smoother = ScoreSmoother()
     corrections = CorrectionTracker()

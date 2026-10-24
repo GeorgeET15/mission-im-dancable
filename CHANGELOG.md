@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T22:30:00+0530 — Animated reference skeleton preview
+
+- Changed: Added `pose_at()` to reference.py — timestamp-based interpolation between adjacent pose samples with per-landmark missing-data handling (never invents landmarks). Added `playback.py` with `PlaybackClock` (elapsed wall-time playback: play/pause/seek/skip/restart, auto-stop at end, speed independent of tick rate). Added `preview.py` — OpenCV playback window showing the animated reference beside the live camera skeleton; SPACE pause, ←/→ seek ±2 s, R restart, ENTER hands the SAME camera into `run_practice_loop`. Refactored `run_practice` into `prepare()` + `run_practice_loop()` so preview and practice share resources (no second camera open). New flags `--preview` and `--no-cam` with cross-flag validation. 16 new tests.
+- Why: Let users watch the choreography's skeleton at original speed before performing it — the first acceptance criterion for the video-to-practice flow.
+- Validation: `python -m pytest tests/` → 95 passed (clock timing/pause/seek/end, interpolation incl. missing landmarks, panel rendering, mirror). `--preview` ran ~12 s on the display on CUDA (with and without `--no-cam`), cache-hit load, no errors.
+- Limitations: Arrow-key codes for seek are backend-dependent (81/83 and 2/3 handled); interactive key flow unverified headlessly; original video pixels still not shown (skeleton only) — documented trade-off.
+
 ## 2026-10-24T22:25:00+0530 — Milestone 3: rhythm-game layer + pygame UI
 
 - Changed: Added `game.py` (UI-independent GameSession: BRIEFING/ACTIVE/RESULT/COMPLETE phases, interval-gated scoring at 0.25 s so points can't scale with FPS, duplicate-frame protection via frame_id, combo/multiplier, pass/fail with mean-accuracy + reliable-fraction thresholds, retry and mission scorecard). Extended `scoring.py` with joint-angle comparison (`JOINTS`, `angle_errors`, `PoseAnalysis`, `analyze_pose`, `describe_angle_correction`, `joint_angle_deg`) and widened CorrectionTracker to string hints. Added `game_ui.py` — pygame-ce mission-control UI (reference vs live panels, score/combo/accuracy HUD, briefing/result/pause/scorecard screens, loading + fatal-error states). Shared helpers: `window_indices`/`nearest_index` in reference.py, `fit_keypoints` in render.py (practice.py refactored to reuse). New `--game` flag; OpenCV tracker and practice remain as fallbacks. 24 new tests.
