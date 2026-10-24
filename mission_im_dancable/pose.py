@@ -47,6 +47,9 @@ class PoseTracker:
         """
         import torch
 
+        cuda = str(self._device).startswith("cuda") and torch.cuda.is_available()
+        if cuda:
+            torch.cuda.synchronize()  # drain prior work so timing is honest
         start = time.perf_counter()
         with torch.inference_mode():
             results = self._model.predict(
@@ -55,6 +58,8 @@ class PoseTracker:
                 conf=self._confidence,
                 verbose=False,
             )
+        if cuda:
+            torch.cuda.synchronize()
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
         kpts = results[0].keypoints

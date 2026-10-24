@@ -5,6 +5,7 @@ fake inference functions drive everything. Videos are tiny synthetic
 clips written by OpenCV into tmp_path.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -209,9 +210,11 @@ def test_run_benchmark_limit_and_bounded_visualization(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr(benchmark, "PoseTracker", FakeTracker)
+    weights = tmp_path / "y.pt"
+    weights.write_bytes(b"x")
     viz = tmp_path / "overlay.mp4"
     r = benchmark.run_benchmark(video, "yolo", 0.3, device="cpu",
-                                model_path=tmp_path / "y.pt", warmup=2,
+                                model_path=weights, warmup=2,
                                 limit=8, visualize_path=viz)
     assert r["frames_evaluated"] == 6        # limit 8 minus 2 warmup
     assert r["visualization"] == str(viz)
@@ -219,6 +222,78 @@ def test_run_benchmark_limit_and_bounded_visualization(monkeypatch, tmp_path):
     assert cap.isOpened()
     assert cap.get(cv2.CAP_PROP_FRAME_COUNT) > 0
     cap.release()
+
+
+def test_yolo_variant_resolves_model_file(tmp_path):
+    assert benchmark.yolo_model_path("11m") == Path("models/yolo11m-pose.pt")
+    assert benchmark.yolo_model_path("26l") == Path("models/yolo26l-pose.pt")
+    # missing variant weights fail loudly, never substitute n
+    with pytest.raises(FileNotFoundError, match="not found"):
+        benchmark.run_benchmark(tmp_path / "v.mp4", "yolo-99z", 0.3,
+                                device="cpu")
+
+
+def test_yolo_variant_uses_resolved_path_and_records_spec(monkeypatch, tmp_path):
+    video = make_video(tmp_path, n_frames=3)
+    fake_weights = tmp_path / "models" / "yolo11m-pose.pt"
+    fake_weights.parent.mkdir()
+    fake_weights.write_bytes(b"weights")
+    seen = {}
+
+    class FakeTracker:
+        def __init__(self, path, device, conf):
+            seen["path"] = Path(path)
+
+        def predict(self, frame):
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(benchmark, "PoseTracker", FakeTracker)
+    monkeypatch.setattr(benchmark, "YOLO_MODEL_DIR", fake_weights.parent)
+    r = benchmark.run_benchmark(video, "yolo-11m", 0.3, device="cpu", warmup=0)
+    assert seen["path"] == fake_weights
+    assert r["backend"]["model_file"] == "yolo11m-pose.pt"
+    assert r["backend"]["model_sha256"] == benchmark.sha256_of(fake_weights)
+    # explicit --model overrides variant resolution
+    other = tmp_path / "custom.pt"
+    other.write_bytes(b"x")
+    benchmark.run_benchmark(video, "yolo-11m", 0.3, device="cpu",
+                            model_path=other, warmup=0)
+    assert seen["path"] == other
+
+
+def test_missing_frame_indices_recorded(monkeypatch, tmp_path):
+    video = make_video(tmp_path, n_frames=6)
+
+    class FakeTracker:
+        def __init__(self, path, device, conf):
+            pass
+
+        def predict(self, frame):
+            FakeTracker.n += 1
+            return None if FakeTracker.n in {2, 5} else SimpleNamespace(
+                keypoints=np.tile(np.array([1, 2, 0.9], np.float32), (17, 1)),
+                inference_ms=1.0)
+
+        def close(self):
+            pass
+
+    FakeTracker.n = 0
+    monkeypatch.setattr(benchmark, "PoseTracker", FakeTracker)
+    model = tmp_path / "y.pt"
+    model.write_bytes(b"x")
+    r = benchmark.run_benchmark(video, "yolo", 0.3, device="cpu",
+                                model_path=model, warmup=0)
+    assert r["reliability"]["missing_frame_indices"] == [1, 4]
+
+
+def test_sha256_of_matches_hashlib(tmp_path):
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"abc123")
+    import hashlib
+    assert benchmark.sha256_of(f) == hashlib.sha256(b"abc123").hexdigest()
 
 
 def test_mediapipe_backend_parses_gpu_suffix(monkeypatch, tmp_path):

@@ -139,22 +139,29 @@ curl -L -o models/mediapipe/pose_landmarker_heavy.task \
 ```bash
 source .venv/bin/activate
 python -m mission_im_dancable --benchmark-pose --source dance_1.mp4 --pose-backends yolo
+python -m mission_im_dancable --benchmark-pose --source dance_1.mp4 --pose-backends yolo-11l --max-frames 0
 python -m mission_im_dancable --benchmark-pose --source dance_1.mp4 --pose-backends mediapipe-heavy
-python -m mission_im_dancable --benchmark-pose --source dance_1.mp4 --pose-backends mediapipe-heavy-gpu
 ```
 
 - `--max-frames N` caps decoded frames per backend (default **30** smoke test, `0` = whole video); the first 5 are warm-up and excluded from stats.
-- Backends: `yolo`, `mediapipe-<heavy|full|lite>`, optional `-gpu` suffix for the GL delegate.
+- Backends: `yolo` (= yolo11n-pose), `yolo-<variant>` (e.g. `yolo-11l`, `yolo-26m` → `models/yolo<variant>-pose.pt`), `mediapipe-<heavy|full|lite>`, optional `-gpu` suffix for the GL delegate. An explicit `--model PATH` overrides variant resolution.
 - `--visualize-pose` writes an annotated skeleton overlay per backend to `output/pose_benchmark/visual_<backend>.mp4` (streamed, opt-in).
 - Each backend runs in its **own worker process** — YOLO in `.venv`, MediaPipe in `.bench-venv` — strictly sequential, decoding the video one frame at a time. Results merge into `output/pose_benchmark/pose_benchmark.json` (+ `summary.txt`, per-backend `bench_*.json`, world-landmark `world_*.npz`). All under `output/` which is gitignored.
 
-**Measured on this machine** (dance_1.mp4, 720×1280 @ 30 fps, 349 measured + 5 warm-up frames, conf 0.3):
+**Measured on this machine** (dance_1.mp4, 720×1280 @ 30 fps, 349 measured + 5 warm-up frames, conf 0.3, RTX 3060 Laptop CUDA):
 
-| backend | delegate/device | init s | mean ms | p95 ms | fps | det. rate | peak RSS |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| yolo | CUDA / RTX 3060 | 0.96 | 8.9 | 10.0 | 113 | 98.6% | 1.68 GB (torch ctx) |
-| mediapipe-heavy | CPU (XNNPACK) | 0.47 | 46.9 | 50.6 | 21 | 94.8% | 0.61 GB |
-| mediapipe-heavy-gpu | GL via EGL | 0.77 | 21.8 | 23.0 | 46 | 94.8% | 0.63 GB |
+| backend | weights | init s | mean ms | p95 ms | fps | det. rate | max gap | GPU MB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| yolo (baseline) | yolo11n-pose.pt | 0.98 | 8.5 | 9.5 | 118 | 98.6% | 5 | 66 |
+| yolo-11m | yolo11m-pose.pt | 1.04 | 11.0 | 12.6 | 91 | 99.1% | 1 | 173 |
+| **yolo-11l** | yolo11l-pose.pt | 1.06 | 13.9 | 15.2 | 72 | **100%** | **0** | 202 |
+| yolo-11x | yolo11x-pose.pt | 1.15 | 25.3 | 30.5 | 40 | **100%** | **0** | 359 |
+| yolo-26m | yolo26m-pose.pt | 1.05 | 11.6 | 13.2 | 86 | 98.3% | 6 | 175 |
+| yolo-26l | yolo26l-pose.pt | 1.08 | 14.0 | 15.5 | 71 | 98.6% | 5 | 200 |
+| mediapipe-heavy | .task CPU (XNNPACK) | 0.47 | 46.9 | 50.6 | 21 | 94.8% | 17 | — |
+| mediapipe-heavy-gpu | .task GL via EGL | 0.77 | 21.8 | 23.0 | 46 | 94.8% | 17 | — |
+
+`yolo-<variant>` resolves `models/yolo<variant>-pose.pt`; weights from the official [ultralytics/assets v8.4.0 release](https://github.com/ultralytics/assets/releases/tag/v8.4.0). Every miss across every model is frames 5–10 — the dancer backlit by the centre spotlight inside stage haze. Only 11l/11x push through it; **YOLO26 gains nothing here** (26m is slightly worse than baseline). Recommendation: **yolo11l-pose is the best measured upgrade** — perfect detection and zero tracking gaps at ~72 FPS inference (P95 15 ms, well inside a 33 ms frame budget, 202 MB VRAM). Opt in per run with `--model models/yolo11l-pose.pt`; yolo11n stays the code default since scoring thresholds were tuned on its confidence distribution. YOLO11x adds nothing over 11l at 2× the latency.
 
 **Important:** MediaPipe's GPU delegate initializes EGL against the **AMD Radeon iGPU** (Mesa radeonsi) on this hybrid laptop — it does *not* use the NVIDIA card. It is ~2.2× faster than its CPU delegate here but still ~2.5× slower than YOLO-on-CUDA. MediaPipe also emits 33-landmark world coordinates (metres, hip-centred **model estimates** — not mocap); saved to `world_*.npz` for future retargeting analysis. YOLO confidence and MediaPipe visibility/presence are different quantities — don't compare them numerically. Jitter numbers include the dancer's real motion.
 

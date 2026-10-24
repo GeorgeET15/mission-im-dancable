@@ -6,6 +6,7 @@ Results land in an ignored output directory as JSON + a text summary.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import resource
@@ -26,6 +27,24 @@ from .pose import PoseTracker
 
 OUTPUT_DIR = Path("output/pose_benchmark")
 FPS_DEFAULT = 30.0
+YOLO_MODEL_DIR = Path("models")
+
+
+def yolo_model_path(variant: str, model_dir: Path = YOLO_MODEL_DIR) -> Path:
+    """Weights path for a `yolo-<variant>` backend (e.g. 11m → yolo11m-pose.pt).
+
+    The bare `yolo` backend is always the default yolo11n-pose.pt. Variants
+    are never silently substituted — a missing file fails loudly.
+    """
+    return model_dir / f"yolo{variant}-pose.pt"
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def read_video_meta(video_path: Path) -> dict:
@@ -170,6 +189,11 @@ def _env_info() -> dict:
         info["mediapipe"] = mp.__version__
     except ImportError:
         info["mediapipe"] = None
+    try:
+        import ultralytics
+        info["ultralytics"] = ultralytics.__version__
+    except ImportError:
+        info["ultralytics"] = None
     info["opencv"] = cv2.__version__
     info["numpy"] = np.__version__
     return info
@@ -207,11 +231,21 @@ def run_benchmark(
     written to the VideoWriter immediately — nothing accumulates.
     """
     spec = {"backend": backend, "device": device}
-    if backend == "yolo":
+    if backend == "yolo" or backend.startswith("yolo-"):
+        if backend == "yolo":
+            ypath = Path(model_path) if model_path else YOLO_MODEL_DIR / "yolo11n-pose.pt"
+        else:
+            # Explicit --model wins; otherwise resolve the variant filename.
+            ypath = Path(model_path) if model_path else yolo_model_path(
+                backend.split("-", 1)[1], YOLO_MODEL_DIR)
         t0 = time.perf_counter()
-        tracker = PoseTracker(model_path or Path("models/yolo11n-pose.pt"), device, confidence)
+        tracker = PoseTracker(ypath, device, confidence)
         init_s = time.perf_counter() - t0
         infer = tracker.predict
+        spec["model_path"] = str(ypath)
+        spec["model_file"] = ypath.name
+        spec["model_sha256"] = sha256_of(ypath)
+        spec["device_verified"] = None  # set after warm-up (params move lazily)
     elif backend.startswith("mediapipe"):
         parts = backend.split("-")[1:]
         delegate = "gpu" if "gpu" in parts else "cpu"
@@ -230,15 +264,37 @@ def run_benchmark(
         raise ValueError(f"unknown backend {backend!r}")
 
     detected: list[bool] = []
+    missing_idx: list[int] = []
     kpts_seq: list[np.ndarray | None] = []
     world_samples: list[np.ndarray] = []
     infer_ms, e2e_ms = [], []
     writer = None
+    # Measure inference-phase VRAM, not the load spike.
+    try:
+        if str(device).startswith("cuda"):
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        pass
     wall0, cpu0 = time.perf_counter(), time.process_time()
     try:
         for idx, frame in iter_frames(video_path, limit):
             if idx < warmup:  # warm-up: runs inference, excluded from stats
                 infer(frame)
+                if idx == warmup - 1 and backend.startswith("yolo"):
+                    try:  # inference copy lives under predictor.model (AutoBackend)
+                        import torch
+                        pred = tracker._model.predictor
+                        inner = getattr(pred.model, "model", None)
+                        spec["device_verified"] = bool(
+                            str(device).startswith("cuda")
+                            and torch.cuda.is_available()
+                            and str(pred.device).startswith("cuda")
+                            and inner is not None
+                            and any(p.is_cuda for p in inner.parameters()))
+                    except Exception:
+                        spec["device_verified"] = False
                 continue
             t0 = time.perf_counter()
             result = infer(frame)
@@ -248,6 +304,8 @@ def run_benchmark(
             # expose their inner timing, so fall back to the call duration.
             infer_ms.append(result.inference_ms if result else e2e)
             detected.append(result is not None)
+            if result is None:
+                missing_idx.append(idx)
             kpts_seq.append(result.keypoints if result else None)
             if result is not None:
                 world = getattr(result, "world_landmarks", None)
@@ -289,6 +347,7 @@ def run_benchmark(
         "reliability": {
             "detection_rate": round(sum(detected) / len(detected), 4) if detected else 0.0,
             **missing_runs(detected),
+            "missing_frame_indices": missing_idx[:100],
             "mean_landmark_score": round(float(np.mean(scores)), 3) if scores else 0.0,
         },
         "jitter": temporal_jitter(kpts_seq, confidence),
@@ -298,7 +357,8 @@ def run_benchmark(
             "cpu_s": round(cpu_s, 2),
             "peak_rss_mb": round(
                 resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
-            "gpu_peak_mb": _gpu_peak_mb(device if backend == "yolo" else "cpu"),
+            "gpu_peak_mb": _gpu_peak_mb(
+                device if backend.startswith("yolo") else "cpu"),
         },
     }
     if visualize_path is not None:

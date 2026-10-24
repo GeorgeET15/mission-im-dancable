@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T02:30:00+05:30 — YOLO pose variant benchmark (11m/11l/11x/26m/26l)
+
+- Changed: `benchmark.py` gained `yolo-<variant>` backend resolution (`models/yolo<variant>-pose.pt`, explicit `--model` still wins), per-model SHA-256 + post-warmup CUDA-device verification (predictor's inner module), missing-frame index recording, inference-phase GPU-peak reset; `pose.py` wraps predict in `torch.cuda.synchronize()` for honest GPU timing; `benchmark_run.py` forwards `--model` only when explicitly set. Downloaded official v8.4.0 weights for yolo11m/l/x-pose and yolo26m/l-pose (gitignored). 4 new tests.
+- Why: Check whether a larger or newer pose model improves dance tracking while staying real-time on the RTX 3060 — baseline 11n misses 5 frames during the backlit/hazy intro.
+- Validation: `pytest tests/` → 157 passed. Full 354-frame CUDA run per model, one at a time (`device_verified: true`, honest sync timing): 11n 8.5 ms / 98.6% / gap 5; 11m 11.0 ms / 99.1% / gap 1; **11l 13.9 ms / 100% / gap 0**; 11x 25.3 ms / 100% / gap 0; 26m 11.6 ms / 98.3% / gap 6; 26l 14.0 ms / 98.6% / gap 5. All misses are frames 5–10 (spotlight + stage haze); overlay check shows 11l recovers a clean skeleton there.
+- Limitations: Single clip; misses are an intro edge case, so 100% detection reflects this video only; jitter includes real motion; recommendation (11l) is opt-in — code default unchanged; no scoring-threshold recalibration tested; YOLO26 offers no benefit on this clip.
+
 ## 2026-10-25T02:00:00+05:30 — MediaPipe vs YOLO pose backend benchmark
 
 - Changed: Added `mediapipe_pose.py` (VIDEO-mode `PoseLandmarker` adapter; MediaPipe 33→COCO-17 mapping with out-of-frame/NaN rejection, world-landmark capture, pluggable cpu/gpu delegate), `benchmark.py` (streaming `iter_frames`, per-frame latency/reliability/jitter/world stats, peak RSS + CUDA peak, merge-on-save JSON), `benchmark_run.py` + `_bench_worker.py` (one backend per worker process — `.venv` for YOLO, `.bench-venv` for MediaPipe — strictly sequential). New CLI: `--benchmark-pose`, `--pose-backends`, `--visualize-pose`, `--max-frames` (default 30 smoke, 0 = full). `pose.py` gained `torch.inference_mode()` + `close()`. `.gitignore` covers `.bench-venv/` and `*.task`. 19 new tests.

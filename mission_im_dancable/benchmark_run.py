@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import benchmark
-from .config import AppConfig, resolve_device
+from .config import AppConfig, DEFAULT_MODEL_PATH, resolve_device
 
 BENCH_VENV = Path(__file__).resolve().parent.parent / ".bench-venv"
 
@@ -66,6 +66,9 @@ def run(cfg: AppConfig) -> int:
             "--limit", str(cfg.max_frames),
             "--outdir", str(out_dir),
         ]
+        # Forward an explicit --model only (variant backends resolve their own).
+        if cfg.model_path != DEFAULT_MODEL_PATH:
+            cmd += ["--model", str(cfg.model_path)]
         if cfg.visualize_pose:
             cmd.append("--visualize")
         print(f"\n=== {backend} ({py}) ===", flush=True)
