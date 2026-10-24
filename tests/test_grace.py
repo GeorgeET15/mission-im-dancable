@@ -35,14 +35,19 @@ def test_failing_move_enters_grace_then_expires():
         s.update(now, None, False, fid)
     assert s.phase == GamePhase.GRACE
     assert s.grace_remaining > 4.0
-    assert s.time == s.move.end  # reference frozen on the last pose
+    seen = {round(s.time, 2)}
     while s.phase == GamePhase.GRACE:  # keep failing → window expires
-        assert s.time == s.move.end
+        now += 0.25
+        fid += 1
+        s.update(now, None, False, fid)
+        assert s.move.start <= s.time <= s.move.end  # reference loops the move
+        seen.add(round(s.time, 2))
         now += 0.25
         fid += 1
         s.update(now, None, False, fid)
     assert s.phase == GamePhase.RESULT
     assert not s.last_result.passed
+    assert len(seen) > 2  # time wrapped through the range — looping, not frozen
 
 
 def test_recovery_during_grace_passes_early():

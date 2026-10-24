@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T04:05:00+05:30 — Grace window loops the move instead of freezing
+
+- Changed: During `GamePhase.GRACE` `session.time` now wraps within `[move.start, move.end]` — the reference skeleton replays the move cyclically while the player finishes, rather than holding a static final pose. `session.time` jumps to `move.start` on entry; scoring clock and countdown unchanged.
+- Why: User decision — a dance move is a motion, so the target should keep moving; matching a single frozen pose would be trivial and unrepresentative.
+- Validation: `pytest tests/` → 122 passed; grace tests now assert time stays in range and wraps (looping, not frozen).
+- Limitations: none beyond existing grace scope (performance mode only).
+
 ## 2026-10-25T03:55:00+05:30 — Freeze reference during the completion window
 
 - Changed: During `GamePhase.GRACE` `session.time` now clamps at `move.end` — the reference skeleton holds the move's final pose instead of playing ahead into the next move (typing-game behavior). Scoring intervals run on a separate `_eval_elapsed` clock so evaluations still commit during the window; `_grace_elapsed` tracks the countdown.

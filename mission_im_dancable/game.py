@@ -231,8 +231,10 @@ class GameSession:
         self._eval_elapsed += dt
         if self.phase == GamePhase.ACTIVE:
             self.time += dt
-        else:  # GRACE: reference freezes on the move's last pose (typing-game style)
+        else:  # GRACE: loop the move's range while the player finishes
             self._grace_elapsed += dt
+            dur = self.move.duration or 1.0
+            self.time = self.move.start + (self.time - self.move.start + dt) % dur
 
         if frame_id == self._last_frame_id:
             return None  # same camera frame re-processed — not a new event
@@ -264,7 +266,7 @@ class GameSession:
             else:  # failing at move end → last-chance window, not instant fail
                 self.phase = GamePhase.GRACE
                 self._grace_elapsed = 0.0
-                self.time = self.move.end  # hold the final pose, don't play ahead
+                self.time = self.move.start  # replay the move from the top
         elif self.phase == GamePhase.GRACE:
             if self._would_pass() or self._grace_elapsed >= self.config.grace_seconds:
                 self._finish_move()
