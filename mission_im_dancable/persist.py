@@ -18,6 +18,9 @@ DEFAULT_SETTINGS = {
     "camera_index": 0,
     "mirror": True,
     "last_video": "",
+    "fullscreen": False,
+    "window_s": 0.15,
+    "volume": 80,
 }
 
 

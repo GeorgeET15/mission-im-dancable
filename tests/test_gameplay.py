@@ -53,21 +53,34 @@ class FakeTracker:
 class FakeManager:
     def __init__(self):
         self.replaced = None
+        self.swapped = None
+        self.popped = 0
+        self.depth = 1
 
     def replace(self, screen):
         self.replaced = screen
+
+    def swap(self, screen):
+        self.swapped = screen
+
+    def pop(self):
+        self.popped += 1
 
 
 def _ctx(mode="performance", live=True):
     moves = [Move("m1", 0.0, 1.0)]
     return SimpleNamespace(
         cfg=AppConfig(window_s=0.15, confidence=0.3),
+        window_s=lambda: 0.15,
         mode=mode,
         choreo=_choreo(),
         moves=moves,
         mirror=False,
         tracker=FakeTracker(live),
         settings={"camera_index": 0},
+        cap=None,
+        auto_start=False,
+        fullscreen=False,
         particles=SimpleNamespace(burst=lambda *a, **k: None, draw=lambda *a: None, update=lambda dt: None),
         manager=FakeManager(),
         t=0.0,

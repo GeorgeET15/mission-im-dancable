@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from . import theme
 
 
@@ -33,7 +35,7 @@ class Button:
         color = theme.PINK if self.primary else theme.CYAN
         if not self.enabled:
             color = theme.DIM
-        scale = 0.96 if self._press_t > 0 else (1.0 + 0.03 * (1 + __import__("math").sin(t * 4)) if active and self.primary else 1.0)
+        scale = 0.96 if self._press_t > 0 else (1.0 + 0.03 * (1 + math.sin(t * 4)) if active and self.primary else 1.0)
         dx, dy = int(x + w * (1 - scale) / 2), int(y + h * (1 - scale) / 2)
         dw, dh = int(w * scale), int(h * scale)
         body = theme.PANEL if not self.primary else (60, 18, 70)
@@ -124,6 +126,57 @@ class TextField:
         if self.focused and int(t * 2) % 2 == 0:
             cx = self.rect.x + 12 + txt.get_width()
             pygame.draw.line(surf, theme.CYAN, (cx, self.rect.y + 8), (cx, self.rect.y + self.rect.h - 8), 2)
+
+
+class Stepper:
+    """Numeric option with −/+ buttons: label on the left, controls right."""
+
+    BTN = 46
+
+    def __init__(self, rect, label: str, action: str, fmt=str):
+        self.rect = rect
+        self.label = label
+        self.action = action  # "action-" / "action+" fired on the buttons
+        self.fmt = fmt
+        self.value = 0.0
+        self.hovered = self.focused = False
+        self._press_t = 0.0
+
+    def _boxes(self):
+        x, y, w, h = self.rect
+        minus = (x + w - 2 * self.BTN - 90, y + (h - 36) // 2, self.BTN, 36)
+        plus = (x + w - self.BTN, y + (h - 36) // 2, self.BTN, 36)
+        val = (x + w - self.BTN - 86, y + (h - 36) // 2, 86, 36)
+        return minus, val, plus
+
+    def contains(self, pos) -> bool:
+        return self.rect.collidepoint(pos)
+
+    def action_at(self, pos) -> str | None:
+        """Which control was clicked: 'action-', 'action+', or None."""
+        minus, _, plus = self._boxes()
+        import pygame
+        if pygame.Rect(minus).collidepoint(pos):
+            return f"{self.action}-"
+        if pygame.Rect(plus).collidepoint(pos):
+            return f"{self.action}+"
+        return None
+
+    def update(self, dt: float) -> None:
+        self._press_t = max(0.0, self._press_t - dt)
+
+    def draw(self, pygame, surf, font) -> None:
+        x, y, w, h = self.rect
+        txt = font.render(self.label, True, theme.TEXT if not self.focused else theme.CYAN)
+        surf.blit(txt, (x, y + (h - txt.get_height()) // 2))
+        minus, val, plus = self._boxes()
+        for box, glyph in ((minus, "−"), (plus, "+")):
+            pygame.draw.rect(surf, theme.PANEL, box, border_radius=8)
+            pygame.draw.rect(surf, theme.PANEL_EDGE, box, 1, border_radius=8)
+            g = font.render(glyph, True, theme.CYAN)
+            surf.blit(g, g.get_rect(center=(box[0] + box[2] // 2, box[1] + box[3] // 2)))
+        vtxt = font.render(self.fmt(self.value), True, theme.GOLD)
+        surf.blit(vtxt, vtxt.get_rect(center=(val[0] + val[2] // 2, val[1] + val[3] // 2)))
 
 
 class FocusGroup:

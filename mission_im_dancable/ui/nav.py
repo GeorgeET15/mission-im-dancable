@@ -47,6 +47,17 @@ class Navigator:
         self._fade = self._fade_duration
         return old
 
+    def swap(self, screen) -> None:
+        """Pop the top screen and push a new one without re-entering the
+        revealed screen. Used for A→B handoffs inside the same flow
+        (ready check → gameplay) where the screen underneath stays
+        suspended rather than becoming active in between."""
+        if self._stack:
+            self._stack.pop().exit()
+        self._stack.append(screen)
+        screen.enter()
+        self._fade = self._fade_duration
+
     def replace(self, screen) -> None:
         while self._stack:
             self._stack.pop().exit()

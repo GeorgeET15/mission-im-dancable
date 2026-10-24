@@ -1,4 +1,4 @@
-"""Screens for the dance-arcade UI: home, select, play, results, settings, scores."""
+"""Screens for the dance-arcade UI: home, select, ready, play, results, settings."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pygame
 
+from ..audio import ensure_audio_wav
 from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
@@ -42,10 +43,11 @@ from ..scoring import (
 )
 from . import theme
 from .nav import Navigator
-from .widgets import Button, FocusGroup, ProgressBar, TextField, Toggle
+from .widgets import Button, FocusGroup, ProgressBar, Stepper, TextField, Toggle
 
 W, H = 1280, 720
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+MAX_DETECTED = 4
 
 
 class AppContext:
@@ -65,9 +67,35 @@ class AppContext:
         self.choreo: ReferenceChoreography | None = None
         self.moves = None
         self.beats = None  # BeatGrid set after analyze; None = no beat sync
+        # Shared webcam capture: ReadyScreen opens it in the background,
+        # PlayScreen consumes it, menus release it. One open per session.
+        self.cap = None
+        self.auto_start = False  # countdown finished → skip first BRIEFING
+        self.fullscreen = bool(self.settings.get("fullscreen", False))
+        self.music = None        # audio.Music, created by the app loop
+        self.audio_path: Path | None = None  # cached WAV of the picked video
+        self.browse_result: Path | None = None  # set by BrowseScreen picks
+        self.last_session = None
+        self.last_results = None
         self.t = 0.0
         self.particles = theme.Particles()
         self.quit = False
+
+    def window_s(self) -> float:
+        """Match window half-width; user setting wins over the CLI default."""
+        try:
+            return float(self.settings.get("window_s", self.cfg.window_s))
+        except (TypeError, ValueError):
+            return self.cfg.window_s
+
+
+def close_camera(ctx) -> None:
+    """Release the shared webcam capture if one is open (None ctx = no-op)."""
+    if ctx is None:
+        return
+    cap, ctx.cap = ctx.cap, None
+    if cap is not None:
+        cap.release()
 
 
 class Screen:
@@ -76,6 +104,20 @@ class Screen:
     def handle_event(self, ctx, ev) -> None: ...
     def update(self, ctx, dt) -> None: ...
     def draw(self, ctx, surf) -> None: ...
+
+
+_glow_cache = {}
+
+
+def _glow_layer(pygame, size):
+    """One reusable translucent scratch surface per size (avoids a fresh
+    1280x720 allocation for every skeleton, every frame)."""
+    layer = _glow_cache.get(size)
+    if layer is None:
+        layer = pygame.Surface(size, pygame.SRCALPHA)
+        _glow_cache[size] = layer
+    layer.fill((0, 0, 0, 0))
+    return layer
 
 
 def _bg(pygame, ctx, surf, t: float) -> None:
@@ -93,8 +135,33 @@ def _title(pygame, ctx, surf, t: float, y: int = 90) -> None:
     surf.blit(tag, tag.get_rect(center=(W // 2, y + 52 + bob)))
 
 
+def _dim_strip(pygame, surf, rect) -> None:
+    """Soft dark band behind footer text so equalizer bars don't eat it."""
+    strip = pygame.Surface((rect[2], rect[3]), pygame.SRCALPHA)
+    strip.fill((8, 4, 18, 170))
+    surf.blit(strip, rect[:2])
+
+
+def _panel_label(pygame, ctx, surf, text: str, x: int, y: int, color=theme.DIM) -> None:
+    img = ctx.fonts["sm"].render(text, True, color)
+    surf.blit(img, (x, y))
+
+
+def _chip(pygame, ctx, surf, text: str, center, fg, bg=(16, 10, 30, 220)) -> None:
+    """Small rounded status pill (tracking state, camera status)."""
+    img = ctx.fonts["sm"].render(text, True, fg)
+    w, h = img.get_width() + 28, img.get_height() + 12
+    rect = pygame.Rect(0, 0, w, h)
+    rect.center = center
+    box = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(box, bg, box.get_rect(), border_radius=h // 2)
+    pygame.draw.rect(box, fg, box.get_rect(), 1, border_radius=h // 2)
+    surf.blit(box, rect)
+    surf.blit(img, img.get_rect(center=rect.center))
+
+
 def _neon_skeleton(pygame, surf, keypoints: np.ndarray, conf: float, color=theme.CYAN) -> None:
-    glow = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    glow = _glow_layer(pygame, surf.get_size())
     for a, b in SKELETON_EDGES:
         pa, pb = keypoints[a], keypoints[b]
         if pa[2] >= conf and pb[2] >= conf:
@@ -152,6 +219,26 @@ def _pick_hint(analysis, live, reference):
     return None
 
 
+def _open_camera_ctx(ctx) -> None:
+    """Open the shared camera into ctx.cap (runs on a worker thread)."""
+    cam_cfg = AppConfig(
+        camera_index=int(ctx.settings.get("camera_index", ctx.cfg.camera_index)),
+        frame_width=ctx.cfg.frame_width,
+        frame_height=ctx.cfg.frame_height,
+    )
+    ctx.cap = open_camera(cam_cfg)
+
+
+def _best_score_for(video_name: str, scores: list[dict]) -> dict | None:
+    best = None
+    for s in scores:
+        if Path(s.get("video", "")).name == video_name and (
+            best is None or s.get("score", 0) > best.get("score", 0)
+        ):
+            best = s
+    return best
+
+
 # --- HOME ------------------------------------------------------------------
 
 
@@ -166,6 +253,9 @@ class HomeScreen(Screen):
             for i, (lbl, act, prim) in enumerate(self.LABELS)
         ]
         self.group = FocusGroup(self.buttons)
+        self.confirm_quit = False
+        self.last_line = ""
+        self._need_close = True  # release a leftover webcam next update
 
     def _activate(self, ctx, action: str) -> None:
         if action == "dance":
@@ -179,9 +269,19 @@ class HomeScreen(Screen):
         elif action == "settings":
             ctx.manager.push(SettingsScreen())
         elif action == "quit":
-            ctx.quit = True
+            self.confirm_quit = True
 
     def handle_event(self, ctx, ev) -> None:
+        self._ctx = ctx
+        if self.confirm_quit:
+            if ev.type == pygame.KEYDOWN:
+                if ev.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_q):
+                    ctx.quit = True
+                elif ev.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    self.confirm_quit = False
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                self.confirm_quit = False
+            return
         if ev.type == pygame.MOUSEMOTION:
             self.group.hover(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -199,18 +299,51 @@ class HomeScreen(Screen):
                 if b:
                     b.press()
                     self._activate(ctx, b.action)
+            elif ev.key == pygame.K_ESCAPE:
+                self.confirm_quit = True
 
     def update(self, ctx, dt) -> None:
+        self._ctx = ctx
+        if self._need_close:
+            self._need_close = False
+            close_camera(ctx)
         for b in self.buttons:
             b.update(dt)
+        if not self.last_line:
+            video = ctx.settings.get("last_video", "")
+            scores = load_scores()
+            best = _best_score_for(Path(video).name, scores) if video else None
+            if best:
+                self.last_line = (
+                    f"last mission: {Path(video).name} · best {best['score']} pts "
+                    f"(grade {best['grade']})"
+                )
+            elif scores:
+                top = scores[0]
+                self.last_line = (
+                    f"best run so far: {top['score']} pts "
+                    f"(grade {top['grade']}) on {Path(top['video']).name}"
+                )
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
         _title(pygame, ctx, surf, ctx.t)
+        if self.last_line:
+            info = ctx.fonts["sm"].render(self.last_line, True, theme.GOLD)
+            surf.blit(info, info.get_rect(center=(W // 2, 244)))
         for b in self.buttons:
             b.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        hint = ctx.fonts["sm"].render("arrows + ENTER · or click", True, theme.DIM)
-        surf.blit(hint, hint.get_rect(center=(W // 2, H - 24)))
+        _dim_strip(pygame, surf, (W // 2 - 220, H - 44, 440, 34))
+        hint = ctx.fonts["sm"].render("arrows + ENTER · or click · ESC quit", True, theme.DIM)
+        surf.blit(hint, hint.get_rect(center=(W // 2, H - 26)))
+        if self.confirm_quit:
+            veil = pygame.Surface((W, H), pygame.SRCALPHA)
+            veil.fill((8, 4, 18, 210))
+            surf.blit(veil, (0, 0))
+            img = theme.glow_text(pygame, ctx.fonts["big"], "QUIT MISSION?", theme.PINK)
+            surf.blit(img, img.get_rect(center=(W // 2, 320)))
+            t3 = ctx.fonts["med"].render("ENTER yes · ESC stay", True, theme.GOLD)
+            surf.blit(t3, t3.get_rect(center=(W // 2, 400)))
 
 
 # --- DANCE SELECT -----------------------------------------------------------
@@ -220,15 +353,15 @@ class SelectScreen(Screen):
     """Pick a local video, analyze it (background thread), start dancing."""
 
     def enter(self) -> None:
-        self.field = TextField(pygame.Rect(60, 300, 760, 44), placeholder="type a video path, or pick one below")
-        self.btn_analyze = Button(pygame.Rect(840, 296, 190, 48), "ANALYZE", "analyze", True)
-        self.btn_start = Button(pygame.Rect(1050, 296, 190, 48), "START DANCING", "start", True, enabled=False)
-        self.tgl_mode = Toggle(pygame.Rect(60, 380, 400, 30), "mode: practice / performance", "mode", True)
-        self.tgl_mirror = Toggle(pygame.Rect(60, 420, 400, 30), "mirror choreography", "mirror", False)
-        self.btn_back = Button(pygame.Rect(60, 640, 160, 48), "BACK", "back")
-        self.btn_browse = Button(pygame.Rect(230, 640, 160, 48), "BROWSE…", "browse")
-        self.btn_watch = Button(pygame.Rect(400, 640, 160, 48), "WATCH", "watch", enabled=False)
-        self.video_buttons: list[Button] = []
+        self.field = TextField(pygame.Rect(60, 190, 760, 44), placeholder="type a video path, or click a dance below")
+        self.btn_analyze = Button(pygame.Rect(840, 188, 190, 48), "ANALYZE", "analyze", True)
+        self.btn_start = Button(pygame.Rect(1050, 188, 190, 48), "START DANCING", "start", True, enabled=False)
+        self.tgl_mode = Toggle(pygame.Rect(60, 260, 460, 30), "performance mode (scored run)", "mode", True)
+        self.tgl_mirror = Toggle(pygame.Rect(60, 298, 460, 30), "mirror choreography", "mirror", False)
+        self.btn_back = Button(pygame.Rect(60, 645, 160, 48), "BACK", "back")
+        self.btn_browse = Button(pygame.Rect(230, 645, 160, 48), "BROWSE…", "browse")
+        self.btn_watch = Button(pygame.Rect(400, 645, 160, 48), "WATCH", "watch", enabled=False)
+        self.cards: list[dict] = []
         self.status = "pick a video and press ANALYZE"
         self.status_color = theme.DIM
         self.info = ""
@@ -237,27 +370,45 @@ class SelectScreen(Screen):
         self.moves = None
         self._thread = None
         self.error = ""
-        self.bar = ProgressBar(pygame.Rect(60, 560, 700, 14), color=theme.PINK)
+        self.bar = ProgressBar(pygame.Rect(60, 610, 700, 14), color=theme.PINK)
         self._synced = False
+        self._scores = None
+
+    # -- helpers ------------------------------------------------------------
 
     def _sync(self, ctx) -> None:
+        self._ctx = ctx
         if not self._synced:
             self._synced = True
+            close_camera(ctx)  # landing here ends any gameplay session
             self.tgl_mode.value = ctx.mode == "performance"
             self.tgl_mirror.value = ctx.mirror
             if ctx.video_path and not self.field.text:
                 self.field.text = str(ctx.video_path)
             elif not self.field.text and ctx.settings.get("last_video"):
                 self.field.text = ctx.settings["last_video"]
-            vids = _detect_videos(Path.cwd())[:4]
-            self.video_buttons = [
-                Button(pygame.Rect(60 + i * 300, 500, 280, 40), v.name[:26], f"pick:{v.name}")
-                for i, v in enumerate(vids)
-            ]
+            self._scores = load_scores()
+            vids = _detect_videos(Path.cwd())[:MAX_DETECTED]
+            self.cards = [self._make_card(v, i) for i, v in enumerate(vids)]
             if ctx.choreo is not None and ctx.video_path and Path(self.field.text) == ctx.video_path:
                 self.choreo, self.moves = ctx.choreo, ctx.moves
                 self.btn_start.enabled = True
+                self.btn_watch.enabled = True
                 self._fill_info(ctx.video_path)
+                self._set_status("ready — START DANCING or WATCH first", theme.GOOD)
+
+    def _make_card(self, path: Path, i: int) -> dict:
+        probe = _probe_video(path)
+        dur = f"{probe[0]:.1f}s" if probe else "?s"
+        best = _best_score_for(path.name, self._scores or [])
+        meta = dur + (f" · best {best['score']} ({best['grade']})" if best else " · new")
+        return {
+            "path": path,
+            "rect": pygame.Rect(60 + i * 300, 355, 290, 64),
+            "name": path.name,
+            "meta": meta,
+            "hovered": False,
+        }
 
     def _fill_info(self, path: Path) -> None:
         probe = _probe_video(path)
@@ -288,6 +439,7 @@ class SelectScreen(Screen):
         ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
         self.choreo = None
         self.moves = None
+        self.info = ""
         self.btn_start.enabled = False
         self.btn_watch.enabled = False
         self.progress = 0.0
@@ -318,6 +470,7 @@ class SelectScreen(Screen):
                 self.error = str(exc)
                 return
             ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
+            ctx.audio_path = ensure_audio_wav(path, ctx.cfg.cache_dir)
             self.choreo, self.moves = choreo, moves
 
         self._thread = threading.Thread(target=work, daemon=True)
@@ -339,18 +492,34 @@ class SelectScreen(Screen):
         ctx.settings["last_video"] = str(ctx.video_path)
         ctx.settings["mirror"] = ctx.mirror
         save_settings(ctx.settings)
-        ctx.manager.replace(PlayScreen())
+        ctx.manager.push(ReadyScreen())
+
+    def _back(self, ctx) -> None:
+        if ctx.manager.depth > 1:
+            ctx.manager.pop()
+        else:
+            ctx.manager.replace(HomeScreen())
+
+    # -- events -------------------------------------------------------------
 
     def handle_event(self, ctx, ev) -> None:
+        self._ctx = ctx
         widgets = [self.field, self.btn_analyze, self.btn_start, self.btn_back,
-                   self.btn_browse, self.btn_watch, self.tgl_mode, self.tgl_mirror,
-                   *self.video_buttons]
+                   self.btn_browse, self.btn_watch, self.tgl_mode, self.tgl_mirror]
         if ev.type == pygame.MOUSEMOTION:
             for wdgt in widgets:
                 if hasattr(wdgt, "hovered"):
                     wdgt.hovered = wdgt.contains(ev.pos)
+            for c in self.cards:
+                c["hovered"] = c["rect"].collidepoint(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             self.field.focused = self.field.contains(ev.pos)
+            for c in self.cards:
+                if c["rect"].collidepoint(ev.pos):
+                    self.field.text = str(c["path"])
+                    self.field.focused = False
+                    self._analyze(ctx)
+                    return
             for wdgt in widgets:
                 if isinstance(wdgt, TextField):
                     continue
@@ -364,9 +533,7 @@ class SelectScreen(Screen):
                 else:
                     self.field.handle_key(ev.key, ev.unicode)
             elif ev.key == pygame.K_ESCAPE:
-                ctx.manager.pop()
-            elif ev.key == pygame.K_TAB:
-                pass
+                self._back(ctx)
             elif ev.key == pygame.K_RETURN and self.btn_start.enabled:
                 self._start(ctx)
 
@@ -376,38 +543,31 @@ class SelectScreen(Screen):
         elif action == "start":
             self._start(ctx)
         elif action == "back":
-            ctx.manager.pop()
+            self._back(ctx)
         elif action == "browse":
             self._browse(ctx)
         elif action == "watch":
             ctx.choreo, ctx.moves = self.choreo, self.moves
+            ctx.mode = "performance" if self.tgl_mode.value else "practice"
+            ctx.mirror = self.tgl_mirror.value
             ctx.manager.push(WatchScreen())
         elif action == "mode":
             self.tgl_mode.value = not self.tgl_mode.value
+            ctx.mode = "performance" if self.tgl_mode.value else "practice"
         elif action == "mirror":
             self.tgl_mirror.value = not self.tgl_mirror.value
-        elif action.startswith("pick:"):
-            self.field.text = action[5:]
+            ctx.mirror = self.tgl_mirror.value
 
     def _browse(self, ctx) -> None:
-        try:
-            import tkinter  # noqa: F401
-            from tkinter import filedialog
-
-            root = tkinter.Tk()
-            root.withdraw()
-            path = filedialog.askopenfilename(
-                filetypes=[("videos", "*.mp4 *.mov *.avi *.mkv *.webm")]
-            )
-            root.destroy()
-            if path:
-                self.field.text = path
-                return
-        except Exception:
-            pass
-        self._set_status("no file dialog available — type the path or pick a detected video", theme.DIM)
+        ctx.manager.push(BrowseScreen())
 
     def update(self, ctx, dt) -> None:
+        picked = getattr(ctx, "browse_result", None)
+        if picked is not None:
+            ctx.browse_result = None
+            self.field.text = str(picked)
+            self.field.focused = False
+            self._analyze(ctx)
         self._sync(ctx)
         for wdgt in (self.btn_analyze, self.btn_start, self.btn_back,
                      self.btn_browse, self.btn_watch):
@@ -417,36 +577,54 @@ class SelectScreen(Screen):
             self.progress, self.error = -1.0, ""
         if self.choreo is not None and self.progress >= 0:
             self.progress = -1.0
-            self.btn_start.enabled = True
             n = self.choreo.detected_count()
             if n == 0:
                 self._set_status("no person detected in the video — try another clip", theme.MISS)
                 self.btn_start.enabled = False
             else:
+                self.btn_start.enabled = True
                 self.btn_watch.enabled = True
-                self._set_status("ready with reference skeleton — START DANCING", theme.GOOD)
+                self._set_status("ready with reference skeleton — START DANCING or WATCH first", theme.GOOD)
                 self._fill_info(ctx.video_path)
+
+    # -- draw ---------------------------------------------------------------
+
+    def _draw_card(self, ctx, surf, card: dict) -> None:
+        selected = self.field.text.strip() in (str(card["path"]), card["name"])
+        edge = theme.CYAN if selected else (theme.VIOLET if card["hovered"] else theme.PANEL_EDGE)
+        pygame.draw.rect(surf, theme.PANEL, card["rect"], border_radius=8)
+        pygame.draw.rect(surf, edge, card["rect"], 2 if selected or card["hovered"] else 1,
+                         border_radius=8)
+        name = ctx.fonts["sm"].render(card["name"][:30], True,
+                                      theme.TEXT if selected else theme.DIM)
+        surf.blit(name, (card["rect"].x + 12, card["rect"].y + 10))
+        meta = ctx.fonts["sm"].render(card["meta"], True, theme.DIM)
+        surf.blit(meta, (card["rect"].x + 12, card["rect"].y + 36))
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
-        _title(pygame, ctx, surf, ctx.t, y=54)
+        _title(pygame, ctx, surf, ctx.t, y=48)
         f_sm, f_med = ctx.fonts["sm"], ctx.fonts["med"]
         head = f_med.render(
             "CHOOSE YOUR DANCE" + (" — PERFORMANCE" if self.tgl_mode.value else " — PRACTICE"),
             True, theme.CYAN,
         )
-        surf.blit(head, (60, 250))
+        surf.blit(head, (60, 150))
         self.field.draw(pygame, surf, f_sm, ctx.t)
         self.btn_analyze.draw(pygame, surf, f_med, ctx.t)
         self.btn_start.draw(pygame, surf, f_med, ctx.t)
-        self.btn_watch.draw(pygame, surf, f_med, ctx.t)
         self.tgl_mode.draw(pygame, surf, f_sm)
         self.tgl_mirror.draw(pygame, surf, f_sm)
-        for b in self.video_buttons:
-            b.draw(pygame, surf, f_sm, ctx.t)
+        surf.blit(f_sm.render("detected videos — click to analyze:", True, theme.DIM), (60, 332))
+        for c in self.cards:
+            self._draw_card(ctx, surf, c)
+        if not self.cards:
+            surf.blit(
+                f_sm.render("no .mp4/.mov/.mkv/.webm found next to the game — type a path above", True, theme.DIM),
+                (60, 375))
         if self.info:
-            surf.blit(f_sm.render(self.info, True, theme.TEXT), (60, 465))
-        surf.blit(f_sm.render(self.status, True, self.status_color), (60, 585))
+            surf.blit(f_sm.render(self.info, True, theme.TEXT), (60, 450))
+        surf.blit(f_sm.render(self.status, True, self.status_color), (60, 580))
         if 0 <= self.progress <= 1:
             self.bar.draw(pygame, surf, self.progress, dt=0.016)
         if self.choreo is not None:
@@ -456,15 +634,373 @@ class SelectScreen(Screen):
                 None,
             )
             if i is not None:
-                pygame.draw.rect(surf, theme.PANEL, (1050, 380, 180, 240))
-                pygame.draw.rect(surf, theme.PANEL_EDGE, (1050, 380, 180, 240), 1)
-                fitted = fit_keypoints(self.choreo.keypoints[i], self.choreo.width, self.choreo.height, 1050, 380, 180, 240)
+                rect = (1050, 355, 180, 220)
+                pygame.draw.rect(surf, theme.PANEL, rect, border_radius=8)
+                pygame.draw.rect(surf, theme.PANEL_EDGE, rect, 1, border_radius=8)
+                fitted = fit_keypoints(self.choreo.keypoints[i], self.choreo.width,
+                                       self.choreo.height, *rect)
                 _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence)
+                surf.blit(f_sm.render("first pose", True, theme.DIM), (1050, 580))
         self.btn_back.draw(pygame, surf, f_med, ctx.t)
         self.btn_browse.draw(pygame, surf, f_med, ctx.t)
+        self.btn_watch.draw(pygame, surf, f_med, ctx.t)
+
+
+# --- FILE BROWSER ------------------------------------------------------------
+
+
+class BrowseScreen(Screen):
+    """In-game file browser: pick a dance video from anywhere on disk.
+
+    Single-click a row (or arrows + ENTER): directories navigate, video
+    files set ctx.browse_result and return to the select screen.
+    """
+
+    ROWS = 15
+    ROW_H = 30
+
+    def enter(self) -> None:
+        self.cwd: Path | None = None  # resolved on first update (needs ctx)
+        self.entries: list[tuple[str, str, Path]] = []
+        self.sel = 0
+        self.offset = 0
+        self.err = ""
+        self.btn_up = Button(pygame.Rect(60, 645, 130, 48), "UP", "up")
+        self.btn_cancel = Button(pygame.Rect(200, 645, 170, 48), "CANCEL", "cancel")
+
+    def _refresh(self) -> None:
+        self.entries = []
+        parent = self.cwd.parent
+        if parent != self.cwd:
+            self.entries.append(("dir", "..  (up)", parent))
+        try:
+            kids = sorted(self.cwd.iterdir(), key=lambda p: p.name.lower())
+        except OSError as exc:
+            self.err = f"cannot read directory: {exc}"
+            kids = []
+        dirs = [p for p in kids if p.is_dir() and not p.name.startswith(".")]
+        vids = [p for p in kids if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
+        self.entries += [("dir", p.name + "/", p) for p in dirs]
+        self.entries += [("vid", p.name, p) for p in vids]
+        self.sel = min(self.sel, max(len(self.entries) - 1, 0))
+        self._clamp_scroll()
+
+    def _clamp_scroll(self) -> None:
+        if self.sel < self.offset:
+            self.offset = self.sel
+        elif self.sel >= self.offset + self.ROWS:
+            self.offset = self.sel - self.ROWS + 1
+        self.offset = max(0, min(self.offset, max(len(self.entries) - self.ROWS, 0)))
+
+    def _activate_row(self, ctx, idx: int) -> None:
+        if not (0 <= idx < len(self.entries)):
+            return
+        kind, _, path = self.entries[idx]
+        if kind == "dir":
+            self.cwd = path
+            self.sel = 0
+            self.err = ""
+            self._refresh()
+        else:
+            ctx.browse_result = path
+            ctx.manager.pop()
+
+    def handle_event(self, ctx, ev) -> None:
+        if ev.type == pygame.KEYDOWN:
+            if ev.key in (pygame.K_ESCAPE, pygame.K_q, pygame.K_BACKSPACE):
+                ctx.manager.pop()
+            elif ev.key in (pygame.K_DOWN, pygame.K_s):
+                self.sel = min(self.sel + 1, max(len(self.entries) - 1, 0))
+                self._clamp_scroll()
+            elif ev.key in (pygame.K_UP, pygame.K_w):
+                self.sel = max(self.sel - 1, 0)
+                self._clamp_scroll()
+            elif ev.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_RIGHT):
+                self._activate_row(ctx, self.sel)
+            elif ev.key in (pygame.K_LEFT, pygame.K_a):
+                parent = self.cwd.parent
+                if parent != self.cwd:
+                    self.cwd = parent
+                    self.sel = 0
+                    self._refresh()
+            elif ev.key == pygame.K_PAGEDOWN:
+                self.sel = min(self.sel + self.ROWS, max(len(self.entries) - 1, 0))
+                self._clamp_scroll()
+            elif ev.key == pygame.K_PAGEUP:
+                self.sel = max(self.sel - self.ROWS, 0)
+                self._clamp_scroll()
+        elif ev.type == pygame.MOUSEBUTTONDOWN:
+            if ev.button == 4:  # wheel up
+                self.sel = max(self.sel - 1, 0)
+                self._clamp_scroll()
+            elif ev.button == 5:  # wheel down
+                self.sel = min(self.sel + 1, max(len(self.entries) - 1, 0))
+                self._clamp_scroll()
+            elif ev.button == 1:
+                if self.btn_up.contains(ev.pos):
+                    parent = self.cwd.parent
+                    if parent != self.cwd:
+                        self.cwd = parent
+                        self.sel = 0
+                        self._refresh()
+                elif self.btn_cancel.contains(ev.pos):
+                    ctx.manager.pop()
+                else:
+                    idx = (ev.pos[1] - 200) // self.ROW_H + self.offset
+                    if 200 <= ev.pos[1] < 200 + self.ROWS * self.ROW_H:
+                        self._activate_row(ctx, idx)
+
+    def update(self, ctx, dt) -> None:
+        if self.cwd is None:
+            start = ctx.video_path.parent if ctx.video_path else Path.cwd()
+            self.cwd = start if start.is_dir() else Path.cwd()
+            self._refresh()
+        self.btn_up.update(dt)
+        self.btn_cancel.update(dt)
+
+    def draw(self, ctx, surf) -> None:
+        _bg(pygame, ctx, surf, ctx.t)
+        _title(pygame, ctx, surf, ctx.t, y=44)
+        f_sm, f_med = ctx.fonts["sm"], ctx.fonts["med"]
+        surf.blit(f_med.render("BROWSE — PICK A VIDEO FILE", True, theme.CYAN), (60, 140))
+        cwd_img = f_sm.render(str(self.cwd), True, theme.GOLD)
+        surf.blit(cwd_img, (60, 170))
+        if self.err:
+            surf.blit(f_sm.render(self.err[:80], True, theme.MISS), (60, 545))
+        if not self.entries:
+            surf.blit(f_sm.render("no videos or folders here", True, theme.DIM), (60, 210))
+        y = 200
+        for i in range(self.offset, min(self.offset + self.ROWS, len(self.entries))):
+            kind, name, _ = self.entries[i]
+            selected = i == self.sel
+            row = pygame.Rect(60, y, W - 120, self.ROW_H - 4)
+            if selected:
+                pygame.draw.rect(surf, (*theme.PANEL_EDGE,), row, border_radius=6)
+            elif kind == "dir":
+                pygame.draw.rect(surf, theme.PANEL, row, border_radius=6)
+            color = theme.CYAN if kind == "dir" else theme.TEXT
+            txt = f_sm.render(("▸ " if kind == "dir" else "♪ ") + name, True, color)
+            surf.blit(txt, (row.x + 10, row.y + (row.h - txt.get_height()) // 2))
+            y += self.ROW_H
+        if len(self.entries) > self.ROWS:
+            track = pygame.Rect(W - 46, 200, 8, self.ROWS * self.ROW_H)
+            pygame.draw.rect(surf, theme.PANEL, track, border_radius=4)
+            frac = self.offset / max(len(self.entries) - self.ROWS, 1)
+            th = max(int(track.h * self.ROWS / len(self.entries)), 24)
+            pygame.draw.rect(surf, theme.PANEL_EDGE,
+                             (track.x, track.y + int((track.h - th) * frac), 8, th),
+                             border_radius=4)
+        _dim_strip(pygame, surf, (W // 2 - 320, H - 44, 640, 34))
+        hint = f_sm.render("↑/↓ select · ENTER open · click a row · Q back", True, theme.DIM)
+        surf.blit(hint, hint.get_rect(center=(W // 2, H - 26)))
+        self.btn_up.draw(pygame, surf, f_med, ctx.t)
+        self.btn_cancel.draw(pygame, surf, f_med, ctx.t)
+
+
+# --- READY (camera check + countdown) ----------------------------------------
+
+
+class ReadyScreen(Screen):
+    """Live camera check + countdown between dance select and gameplay.
+
+    Phases: "opening" (camera opens on a worker thread) → "detect"
+    (waiting for a tracked person) → "locked" (person found) →
+    "countdown" → swap into PlayScreen with ctx.auto_start set.
+    A failed open shows the error with retry/back instead of a dead end.
+    """
+
+    DETECT_HOLD = 0.8    # seconds of continuous detection before "locked"
+    LOCK_BEAT = 0.7      # "got you" flash before the countdown
+    COUNTDOWN = 3.0
+    LOST_TIMEOUT = 1.5   # seconds without a pose that aborts the countdown
+
+    def enter(self) -> None:
+        self.phase = "opening"
+        self.err: str | None = None
+        self.frame = None
+        self.live = None
+        self.detect_t = 0.0
+        self.lock_t = 0.0
+        self.count_t = self.COUNTDOWN
+        self.lost_t = 0.0
+        self._canceled = False
+        self._thread: threading.Thread | None = None
+        self.btn_back = Button(pygame.Rect(60, 645, 170, 48), "BACK", "back")
+        self.btn_retry = Button(pygame.Rect(240, 645, 170, 48), "RETRY", "retry")
+        self.btn_skip = Button(pygame.Rect(1050, 645, 170, 48), "SKIP ▸", "skip")
+
+    # -- camera -------------------------------------------------------------
+
+    def _open(self, ctx) -> None:
+        def work() -> None:
+            try:
+                _open_camera_ctx(ctx)
+            except CameraError as exc:
+                self.err = str(exc)
+            except Exception as exc:  # e.g. backend init failure
+                self.err = f"camera failed: {exc}"
+            if self._canceled:
+                close_camera(ctx)  # user backed out while the driver opened
+
+        self._thread = threading.Thread(target=work, daemon=True)
+        self._thread.start()
+
+    def _finish(self, ctx) -> None:
+        # If the player skips while the camera thread is still opening, wait
+        # for it so PlayScreen doesn't open a second capture device.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+        ctx.auto_start = True
+        ctx.manager.swap(PlayScreen())
+
+    # -- events -------------------------------------------------------------
+
+    def _go_back(self, ctx) -> None:
+        self._canceled = True  # tell the camera thread to release its result
+        ctx.manager.pop()
+
+    def handle_event(self, ctx, ev) -> None:
+        if ev.type == pygame.KEYDOWN:
+            if ev.key in (pygame.K_ESCAPE, pygame.K_q):
+                self._go_back(ctx)
+            elif ev.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self.phase == "error":
+                    self._retry(ctx)
+                else:
+                    self._finish(ctx)
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            if self.btn_back.contains(ev.pos):
+                self._go_back(ctx)
+            elif self.phase == "error" and self.btn_retry.contains(ev.pos):
+                self._retry(ctx)
+            elif self.phase != "error" and self.btn_skip.contains(ev.pos):
+                self._finish(ctx)
+
+    def _retry(self, ctx) -> None:
+        close_camera(ctx)
+        self.err = None
+        self._thread = None
+        self.phase = "opening"
+
+    # -- state --------------------------------------------------------------
+
+    def update(self, ctx, dt) -> None:
+        for b in (self.btn_back, self.btn_retry, self.btn_skip):
+            b.update(dt)
+        if self.phase == "opening":
+            if ctx.cap is None and self.err is None and self._thread is None:
+                self._open(ctx)
+            if self.err:
+                self.phase = "error"
+            elif ctx.cap is not None:
+                self.phase = "detect"
+            return
+        if self.phase == "error":
+            return
+
+        ok, frame = ctx.cap.read() if ctx.cap is not None else (False, None)
+        if ok:
+            self.frame = frame
+            self.live = ctx.tracker.predict(frame) if ctx.tracker else None
+        else:
+            self.live = None
+            if self.frame is None:
+                self.err = "camera opened but no frames are arriving"
+                self.phase = "error"
+                return
+
+        if self.phase == "detect":
+            if self.live is not None:
+                self.detect_t += dt
+                if self.detect_t >= self.DETECT_HOLD:
+                    self.phase = "locked"
+                    self.lock_t = self.LOCK_BEAT
+            else:
+                self.detect_t = 0.0
+        elif self.phase == "locked":
+            self.lock_t -= dt
+            if self.lock_t <= 0:
+                self.phase = "countdown"
+                self.count_t = self.COUNTDOWN
+        elif self.phase == "countdown":
+            if self.live is not None:
+                self.lost_t = 0.0
+                self.count_t -= dt
+                if self.count_t <= 0:
+                    self._finish(ctx)
+            else:
+                self.lost_t += dt
+                if self.lost_t >= self.LOST_TIMEOUT:
+                    self.phase = "detect"
+                    self.detect_t = 0.0
+                    self.lost_t = 0.0
+
+    # -- draw ---------------------------------------------------------------
+
+    def draw(self, ctx, surf) -> None:
+        _bg(pygame, ctx, surf, ctx.t)
+        _title(pygame, ctx, surf, ctx.t, y=48)
+        f_sm, f_med, f_big = ctx.fonts["sm"], ctx.fonts["med"], ctx.fonts["big"]
+        surf.blit(f_med.render("GET READY", True, theme.CYAN), (60, 150))
+        rect = (W // 2 - 330, 180, 660, 400)
+        pygame.draw.rect(surf, theme.PANEL, rect, border_radius=8)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, rect, 1, border_radius=8)
+
+        if self.phase == "error":
+            msg = f_sm.render((self.err or "camera unavailable")[:76], True, theme.MISS)
+            surf.blit(msg, msg.get_rect(center=(rect[0] + rect[2] // 2, rect[1] + 170)))
+            sub = f_sm.render("check the webcam is connected and free, then RETRY", True, theme.DIM)
+            surf.blit(sub, sub.get_rect(center=(rect[0] + rect[2] // 2, rect[1] + 210)))
+        elif self.phase == "opening":
+            msg = f_med.render("opening camera…", True, theme.DIM)
+            surf.blit(msg, msg.get_rect(center=(rect[0] + rect[2] // 2, rect[1] + 190)))
+        else:
+            if self.frame is not None:
+                surf.blit(_frame_surf(pygame, self.frame, rect[2], rect[3]), rect[:2])
+            if self.live is not None:
+                fitted = fit_keypoints(self.live.keypoints, self.frame.shape[1],
+                                       self.frame.shape[0], *rect)
+                _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
+
+            if self.phase == "detect":
+                frac = self.detect_t / self.DETECT_HOLD
+                _chip(pygame, ctx, surf,
+                      "POSE FOUND — HOLD STILL" if self.live else "STEP INTO THE FRAME",
+                      (rect[0] + rect[2] // 2, rect[1] + 30),
+                      theme.GOOD if self.live else theme.GOLD)
+                bar = pygame.Rect(rect[0] + 180, rect[1] + rect[3] - 28, rect[2] - 360, 8)
+                pygame.draw.rect(surf, theme.PANEL_EDGE, bar, border_radius=4)
+                pygame.draw.rect(surf, theme.CYAN,
+                                 (bar.x, bar.y, int(bar.w * min(frac, 1.0)), bar.h),
+                                 border_radius=4)
+            elif self.phase == "locked":
+                _chip(pygame, ctx, surf, "GOT YOU — GET READY",
+                      (rect[0] + rect[2] // 2, rect[1] + 30), theme.GOOD)
+            elif self.phase == "countdown":
+                n = int(math.ceil(self.count_t))
+                img = theme.glow_text(pygame, f_big, str(max(n, 1)), theme.GOLD)
+                surf.blit(img, img.get_rect(center=(rect[0] + rect[2] // 2,
+                                                    rect[1] + rect[3] // 2)))
+                if self.lost_t > 0:
+                    _chip(pygame, ctx, surf, "POSE LOST — COUNTDOWN PAUSED",
+                          (rect[0] + rect[2] // 2, rect[1] + 30), theme.MISS)
+
+        _dim_strip(pygame, surf, (160, 588, W - 320, 52))
+        tip = f_sm.render(
+            "stand back so head, hips and feet are visible · decent lighting helps the tracker",
+            True, theme.DIM)
+        surf.blit(tip, tip.get_rect(center=(W // 2, 602)))
+        keys_img = f_sm.render("ENTER skip · Q back", True, theme.DIM)
+        surf.blit(keys_img, keys_img.get_rect(center=(W // 2, 626)))
+        self.btn_back.draw(pygame, surf, f_med, ctx.t)
+        if self.phase != "error":
+            self.btn_skip.draw(pygame, surf, f_med, ctx.t)
+        else:
+            self.btn_retry.draw(pygame, surf, f_med, ctx.t)
 
 
 # --- PLAY --------------------------------------------------------------------
+
 
 POPUP_TTL = 0.9
 
@@ -485,36 +1021,89 @@ class PlayScreen(Screen):
         self.paused = False
         self.flash = 0.0
         self.results_done = False
+        self.no_pose_t = 0.0
         self.smoother = ScoreSmoother()
         self.corrections = CorrectionTracker()
+        self._music_phase = None   # last session phase the music state matched
+        self._music_paused = False
+        self._prev_practice_move = -1
+        self._prev_practice_t = 0.0
 
     def _ensure(self, ctx) -> None:
         """One-time init needing ctx (camera + session); safe to call often."""
         if self._ready:
             return
         self._ready = True
-        try:
-            cam_cfg = AppConfig(
-                camera_index=int(ctx.settings.get("camera_index", ctx.cfg.camera_index)),
-                frame_width=ctx.cfg.frame_width,
-                frame_height=ctx.cfg.frame_height,
-            )
-            self.cap = open_camera(cam_cfg)
-        except CameraError as exc:
-            self.cam_err = str(exc)
+        if ctx.cap is None:
+            try:
+                _open_camera_ctx(ctx)
+            except CameraError as exc:
+                self.cam_err = str(exc)
+        self.cap = ctx.cap
         if ctx.mode == "performance":
             self.session = GameSession(ctx.moves)
         else:
-            self.session = PracticeSession(ctx.choreo, ctx.moves, ctx.cfg.window_s)
+            self.session = PracticeSession(ctx.choreo, ctx.moves, ctx.window_s())
+        if (
+            ctx.auto_start
+            and isinstance(self.session, GameSession)
+            and self.session.phase == GamePhase.BRIEFING
+        ):
+            self.session.start_move()
+        ctx.auto_start = False
 
     def exit(self) -> None:
-        if getattr(self, "cap", None) is not None:
-            self.cap.release()
-            self.cap = None
+        # The camera is shared on ctx — leaving for results or a retry keeps
+        # it warm; menus release it via close_camera().
+        pass
+
+    # -- soundtrack ---------------------------------------------------------
+
+    def _update_music(self, ctx) -> None:
+        """Keep the video's audio aligned with the session clock.
+
+        Performance: plays [move.start → move end) per move; stops in GRACE
+        (the reference freezes at move.end) and between moves. Pauses and
+        re-anchors if wall-clock drift exceeds 0.25 s.
+        Practice: loops each move's audio segment with the session.
+        """
+        music = getattr(ctx, "music", None)
+        if music is None:
+            return
+        if not music.loaded:
+            if not music.load(getattr(ctx, "audio_path", None)):
+                return  # no audio track for this video — silent run
+        if isinstance(self.session, GameSession):
+            phase, paused = self.session.phase, self.session.paused
+            if phase != self._music_phase:
+                if phase == GamePhase.ACTIVE:
+                    music.play_at(self.session.move.start)
+                elif self._music_phase == GamePhase.ACTIVE:
+                    music.stop()
+                self._music_phase = phase
+            if paused != self._music_paused:
+                (music.pause if paused else music.unpause)()
+                self._music_paused = paused
+            if phase == GamePhase.ACTIVE and not paused:
+                pos = music.position()
+                if pos is not None and abs(pos - self.session.time) > 0.25:
+                    music.play_at(self.session.time)
+        else:
+            s = self.session
+            move_changed = s.move_index != self._prev_practice_move
+            wrapped = s.time < self._prev_practice_t - 1e-3
+            if move_changed or wrapped or self._music_phase is None:
+                music.play_at(s.move.start)
+                self._prev_practice_move = s.move_index
+                self._music_phase = True
+            self._prev_practice_t = s.time
+            if self.paused != self._music_paused:
+                (music.pause if self.paused else music.unpause)()
+                self._music_paused = self.paused
 
     def _eval_feed(self, ctx) -> tuple[float | None, bool, np.ndarray | None, object]:
         """Compute accuracy + reliability + display hint against the window."""
-        rows = ctx.choreo.keypoints[window_indices(ctx.choreo, self.session.time, ctx.cfg.window_s)]
+        rows = ctx.choreo.keypoints[window_indices(ctx.choreo, self.session.time, ctx.window_s())]
         if ctx.mirror and rows.size:
             rows = np.stack([mirror_keypoints(r, ctx.choreo.width) for r in rows])
         accuracy, reliable, hint, ref_row = None, False, None, None
@@ -533,6 +1122,8 @@ class PlayScreen(Screen):
     def _on_eval(self, ctx, ev) -> None:
         if ev is None:
             return
+        if ev.accuracy is None:
+            return  # tracking loss is not a player mistake — HUD chip covers it
         j = judge(ev.accuracy, ev.hit)
         color = theme.JUDGE_COLORS[j.value]
         self.popups.append([j.value, color, ctx.t])
@@ -542,6 +1133,12 @@ class PlayScreen(Screen):
             self.popups.append([f"COMBO x{mult}!", theme.PINK, ctx.t])
             ctx.particles.burst(W // 2, 140, theme.PINK, n=30)
             self.flash = 0.5
+
+    def _back(self, ctx) -> None:
+        if ctx.manager.depth > 1:
+            ctx.manager.pop()
+        else:
+            ctx.manager.replace(SelectScreen())
 
     def handle_event(self, ctx, ev) -> None:
         self._ensure(ctx)
@@ -554,7 +1151,13 @@ class PlayScreen(Screen):
             else:
                 self.paused = not self.paused
         elif k == pygame.K_q:
-            ctx.manager.replace(SelectScreen())
+            music = getattr(ctx, "music", None)
+            if music is not None:
+                music.stop()
+            self._back(ctx)
+        elif k == pygame.K_r and self.cam_err:
+            # dead camera → back through the readiness flow to reopen it
+            ctx.manager.swap(ReadyScreen())
         elif k in (pygame.K_SPACE, pygame.K_RETURN):
             if isinstance(self.session, GameSession):
                 if self.session.phase == GamePhase.BRIEFING:
@@ -574,11 +1177,16 @@ class PlayScreen(Screen):
 
     def update(self, ctx, dt) -> None:
         self._ensure(ctx)
+        self.cap = self.cap or ctx.cap
         if self.cap is None:
             return
         ok, frame = self.cap.read()
         self.frame = frame if ok else None
         self.live = ctx.tracker.predict(frame) if (ok and ctx.tracker) else None
+        if self.live is None:
+            self.no_pose_t += dt
+        else:
+            self.no_pose_t = 0.0
         self.frame_id += 1
         accuracy, reliable, hint, _ = self._eval_feed(ctx)
         if isinstance(self.session, GameSession):
@@ -589,6 +1197,7 @@ class PlayScreen(Screen):
             self.session.advance(dt)
         self.hint = self.corrections.update(hint)
         self.flash = max(0.0, self.flash - dt * 2)
+        self._update_music(ctx)
         if (
             isinstance(self.session, GameSession)
             and self.session.phase == GamePhase.COMPLETE
@@ -597,14 +1206,19 @@ class PlayScreen(Screen):
             self.results_done = True
             ctx.last_session = self.session
             ctx.last_results = self.session.results
+            music = getattr(ctx, "music", None)
+            if music is not None:
+                music.stop()
             ctx.manager.replace(ResultsScreen())
 
     def _panels(self, ctx, surf) -> tuple:
         ref_rect = (30, 110, 600, 470)
         cam_rect = (650, 110, 600, 470)
-        for r in (ref_rect, cam_rect):
+        for r, label, color in ((ref_rect, "REFERENCE", theme.VIOLET),
+                                (cam_rect, "YOU", theme.CYAN)):
             pygame.draw.rect(surf, theme.PANEL, r)
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
+            _panel_label(pygame, ctx, surf, label, r[0] + 12, r[1] - 24, color)
         t = self.session.time
         pose = pose_at(ctx.choreo, t)
         if pose is not None and pose[:, 2].max() > 0:
@@ -624,6 +1238,9 @@ class PlayScreen(Screen):
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
+        # Screens can be swapped in during another screen's update(), so
+        # draw can run before this screen's first update() — init lazily.
+        self._ensure(ctx)
         f_sm, f_med, f_big = ctx.fonts["sm"], ctx.fonts["med"], ctx.fonts["big"]
         perf = isinstance(self.session, GameSession)
         surf.blit(f_med.render(f"OBJECTIVE {self.session.move_index + 1}/{len(self.session.moves)}: {self.session.move.name}", True, theme.PINK), (30, 20))
@@ -631,25 +1248,38 @@ class PlayScreen(Screen):
             surf.blit(f_med.render(f"SCORE {self.session.total_score}", True, theme.GOLD), (900, 20))
             mult = min(1 + self.session.combo // self.session.config.combo_step, self.session.config.max_multiplier)
             surf.blit(f_med.render(f"COMBO x{mult} ({self.session.combo})", True, theme.CYAN), (900, 52))
-        self._panels(ctx, surf)
+        ref_rect, cam_rect = self._panels(ctx, surf)
         # beat-synced pulse: border glow on the reference panel + popup kick
         pulse = ctx.beats.pulse(self.session.time) if ctx.beats is not None else 0.0
         if pulse > 0.05:
             glow = tuple(int(a + (b - a) * pulse) for a, b in zip(theme.PANEL_EDGE, theme.CYAN))
-            pygame.draw.rect(surf, glow, (30, 110, 600, 470), 1 + int(3 * pulse), border_radius=4)
+            pygame.draw.rect(surf, glow, ref_rect, 1 + int(3 * pulse), border_radius=4)
+        # tracking-loss chip — replaces the old MISS spam when the pose drops
+        if self.frame is not None and self.live is None and self.no_pose_t > 0.6:
+            _chip(pygame, ctx, surf, "POSE LOST — STEP INTO FRAME",
+                  (cam_rect[0] + cam_rect[2] // 2, cam_rect[1] + 28), theme.GOLD)
         # bottom HUD
         acc = getattr(self.session, "current_accuracy", None) or 0.0
         surf.blit(f_sm.render(f"ACCURACY {acc * 100:3.0f}%", True, theme.TEXT), (30, 600))
-        pygame.draw.rect(surf, theme.PANEL_EDGE, (200, 602, 300, 14))
-        pygame.draw.rect(surf, theme.CYAN if acc >= 0.6 else theme.MISS, (200, 602, int(300 * min(acc, 1.0)), 14))
+        pygame.draw.rect(surf, theme.PANEL_EDGE, (200, 602, 300, 14), border_radius=7)
+        pygame.draw.rect(surf, theme.CYAN if acc >= 0.6 else theme.MISS, (200, 602, int(300 * min(acc, 1.0)), 14), border_radius=7)
+        tick_x = 200 + int(300 * 0.6)  # pass threshold marker
+        pygame.draw.line(surf, theme.GOLD, (tick_x, 599), (tick_x, 619), 2)
         prog = self.session.move_progress if perf else ((self.session.time - self.session.move.start) / max(self.session.move.duration, 1e-6))
-        surf.blit(f_sm.render(f"MOVE {min(prog,1) * 100:3.0f}%", True, theme.TEXT), (540, 600))
-        pygame.draw.rect(surf, theme.PANEL_EDGE, (680, 602, 300, 14))
-        pygame.draw.rect(surf, theme.PINK, (680, 602, int(300 * min(prog, 1.0)), 14))
+        move = self.session.move
+        surf.blit(f_sm.render(f"MOVE {min(prog,1) * 100:3.0f}%  {self.session.time - move.start:4.1f}/{move.duration:.1f}s", True, theme.TEXT), (540, 600))
+        pygame.draw.rect(surf, theme.PANEL_EDGE, (780, 602, 300, 14), border_radius=7)
+        pygame.draw.rect(surf, theme.PINK, (780, 602, int(300 * min(prog, 1.0)), 14), border_radius=7)
+        # whole-routine progress across the footer
+        total = max(ctx.moves[-1].end if ctx.moves else move.end, 1e-6)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, (30, 668, 1220, 6), border_radius=3)
+        pygame.draw.rect(surf, theme.VIOLET, (30, 668, int(1220 * min(self.session.time / total, 1.0)), 6), border_radius=3)
+        _dim_strip(pygame, surf, (24, 628, 700, 40))
         hint_txt = self.hint or ("match the pose" if perf else "practice — copy the dancer")
         surf.blit(f_med.render(hint_txt, True, theme.MISS if self.hint else theme.DIM), (30, 636))
+        _dim_strip(pygame, surf, (24, 686, 560, 30))
         keys = "P pause · M mirror · Q back" if not perf else "SPACE confirm · R retry · P pause · M mirror · Q back"
-        surf.blit(f_sm.render(keys, True, theme.DIM), (30, 690))
+        surf.blit(f_sm.render(keys, True, theme.DIM), (30, 693))
         # judgement popups
         for text, color, born in self.popups:
             age = ctx.t - born
@@ -685,6 +1315,9 @@ class PlayScreen(Screen):
         paused = self.session.paused if perf else self.paused
         if paused:
             self._overlay(ctx, surf, "PAUSED", "", "P resume · Q quit to menu", theme.GOLD)
+        if self.cam_err and self.cap is None:
+            self._overlay(ctx, surf, "CAMERA PROBLEM", self.cam_err[:60],
+                          "R reopen camera · Q back to dances", theme.MISS)
 
     def _overlay(self, ctx, surf, line1, line2, line3, color) -> None:
         veil = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -707,11 +1340,39 @@ class WatchScreen(Screen):
 
     def enter(self) -> None:
         self.clock: PlaybackClock | None = None
+        self.music = None          # ctx.music captured for exit()/stop
+        self.music_paused = False
+
+    def exit(self) -> None:
+        if self.music is not None:
+            self.music.stop()
+
+    def _sync_music(self, ctx) -> None:
+        """Keep audio aligned with the playback clock (pause, seek, end)."""
+        music = getattr(ctx, "music", None)
+        if music is None:
+            return
+        self.music = music
+        if not music.loaded:
+            if not music.load(getattr(ctx, "audio_path", None)):
+                return
+            music.play_at(self.clock.time)
+        if self.clock.playing and self.music_paused:
+            music.unpause()
+        elif not self.clock.playing and not self.music_paused:
+            music.pause()
+        self.music_paused = not self.clock.playing
+
+    def _reanchor(self, ctx) -> None:
+        """Re-sync audio after a seek/restart."""
+        if self.music is not None:
+            self.music.play_at(self.clock.time)
 
     def update(self, ctx, dt) -> None:
         if self.clock is None:
             self.clock = PlaybackClock(ctx.choreo.duration)
         self.clock.now(time.perf_counter())
+        self._sync_music(ctx)
 
     def handle_event(self, ctx, ev) -> None:
         if ev.type != pygame.KEYDOWN:
@@ -719,15 +1380,18 @@ class WatchScreen(Screen):
         if ev.key in (pygame.K_ESCAPE, pygame.K_q):
             ctx.manager.pop()
         elif ev.key == pygame.K_RETURN:
-            ctx.manager.replace(PlayScreen())
+            ctx.manager.swap(ReadyScreen())
         elif ev.key == pygame.K_SPACE and self.clock is not None:
             self.clock.toggle()
         elif ev.key == pygame.K_LEFT and self.clock is not None:
             self.clock.skip(-2.0)
+            self._reanchor(ctx)
         elif ev.key == pygame.K_RIGHT and self.clock is not None:
             self.clock.skip(2.0)
+            self._reanchor(ctx)
         elif ev.key == pygame.K_r and self.clock is not None:
             self.clock.restart()
+            self._reanchor(ctx)
         elif ev.key == pygame.K_m:
             ctx.mirror = not ctx.mirror
 
@@ -736,6 +1400,7 @@ class WatchScreen(Screen):
         rect = (140, 110, 1000, 470)
         pygame.draw.rect(surf, theme.PANEL, rect)
         pygame.draw.rect(surf, theme.PANEL_EDGE, rect, 1, border_radius=4)
+        _panel_label(pygame, ctx, surf, "REFERENCE — FULL DANCE", rect[0] + 12, rect[1] - 24, theme.VIOLET)
         t = self.clock.time if self.clock is not None else 0.0
         pose = pose_at(ctx.choreo, t)
         if pose is not None and pose[:, 2].max() > 0:
@@ -763,6 +1428,7 @@ class ResultsScreen(Screen):
     def enter(self) -> None:
         self.card = None
         self._saved = False
+        self.new_best = False
         self.buttons = []
         self.group = None
         self.born = time.perf_counter()
@@ -774,23 +1440,26 @@ class ResultsScreen(Screen):
             return
         if not self._saved:
             self._saved = True
+            video = ctx.video_path.name if ctx.video_path else "?"
+            prev = _best_score_for(video, load_scores())
+            self.new_best = prev is None or self.card["total_score"] > prev["score"]
             add_score(
-                ctx.video_path.name if ctx.video_path else "?",
+                video,
                 self.card["total_score"], self.card["mean_accuracy"],
                 self.card["best_combo"], grade_for(self.card["mean_accuracy"]),
             )
             ctx.particles.burst(W // 2, 200, theme.GOLD, n=60)
         if not self.buttons:
             self.buttons = [
-                Button(pygame.Rect(W // 2 - 340, 600, 210, 52), "RETRY", "retry", True),
-                Button(pygame.Rect(W // 2 - 105, 600, 230, 52), "ANOTHER DANCE", "select"),
-                Button(pygame.Rect(W // 2 + 150, 600, 190, 52), "HOME", "home"),
+                Button(pygame.Rect(W // 2 - 340, 610, 210, 52), "RETRY", "retry", True),
+                Button(pygame.Rect(W // 2 - 105, 610, 230, 52), "ANOTHER DANCE", "select"),
+                Button(pygame.Rect(W // 2 + 150, 610, 190, 52), "HOME", "home"),
             ]
             self.group = FocusGroup(self.buttons)
 
     def _activate(self, ctx, action: str) -> None:
         if action == "retry":
-            ctx.manager.replace(PlayScreen())
+            ctx.manager.swap(PlayScreen())
         elif action == "select":
             ctx.manager.replace(SelectScreen())
         elif action == "home":
@@ -805,6 +1474,7 @@ class ResultsScreen(Screen):
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             for b in self.buttons:
                 if b.contains(ev.pos):
+                    b.press()
                     self._activate(ctx, b.action)
         elif ev.type == pygame.KEYDOWN:
             if ev.key in (pygame.K_LEFT, pygame.K_a):
@@ -813,9 +1483,22 @@ class ResultsScreen(Screen):
                 self.group.move(1)
             elif ev.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self._activate(ctx, self.group.current.action)
+            elif ev.key == pygame.K_r:
+                self._activate(ctx, "retry")
 
     def update(self, ctx, dt) -> None:
         self._sync(ctx)
+        for b in self.buttons:
+            b.update(dt)
+
+    def _stat(self, ctx, surf, x, y, w, label, value, color) -> None:
+        rect = pygame.Rect(x, y, w, 74)
+        pygame.draw.rect(surf, theme.PANEL, rect, border_radius=10)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, rect, 1, border_radius=10)
+        v = ctx.fonts["med"].render(value, True, color)
+        surf.blit(v, v.get_rect(center=(x + w // 2, y + 26)))
+        lbl = ctx.fonts["sm"].render(label, True, theme.DIM)
+        surf.blit(lbl, lbl.get_rect(center=(x + w // 2, y + 55)))
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
@@ -825,20 +1508,35 @@ class ResultsScreen(Screen):
         card = self.card
         grade = grade_for(card["mean_accuracy"])
         pop = min(1.0, (time.perf_counter() - self.born) * 2.5)
+        head = ctx.fonts["med"].render("MISSION COMPLETE", True, theme.DIM)
+        surf.blit(head, head.get_rect(center=(W // 2, 56)))
         gi = theme.glow_text(pygame, ctx.fonts["big"], f"GRADE {grade}", theme.GOLD)
         gi = pygame.transform.rotozoom(gi, 0, 0.5 + 0.5 * pop)
-        surf.blit(gi, gi.get_rect(center=(W // 2, 120)))
-        stats = (f"score {card['total_score']}  ·  accuracy {card['mean_accuracy'] * 100:.0f}%  ·  "
-                 f"best combo {card['best_combo']}  ·  {card['moves_passed']}/{card['moves_total']} moves")
-        t1 = ctx.fonts["med"].render(stats, True, theme.TEXT)
-        surf.blit(t1, t1.get_rect(center=(W // 2, 210)))
-        y = 270
-        for r in getattr(ctx, "last_results", []):
+        surf.blit(gi, gi.get_rect(center=(W // 2, 130)))
+        score_img = theme.glow_text(pygame, ctx.fonts["big"], f"{card['total_score']:,} PTS", theme.TEXT)
+        surf.blit(score_img, score_img.get_rect(center=(W // 2, 215)))
+        if self.new_best:
+            _chip(pygame, ctx, surf, "★ NEW PERSONAL BEST ★", (W // 2, 268), theme.GOLD)
+        bw, gap = 240, 20
+        x0 = W // 2 - (3 * bw + 2 * gap) // 2
+        self._stat(ctx, surf, x0, 300, bw, "ACCURACY", f"{card['mean_accuracy'] * 100:.0f}%", theme.CYAN)
+        self._stat(ctx, surf, x0 + bw + gap, 300, bw, "BEST COMBO", str(card['best_combo']), theme.PINK)
+        self._stat(ctx, surf, x0 + 2 * (bw + gap), 300, bw, "MOVES PASSED",
+                   f"{card['moves_passed']}/{card['moves_total']}", theme.GOOD)
+        if ctx.video_path:
+            name = ctx.fonts["sm"].render(f"dance: {ctx.video_path.name}", True, theme.DIM)
+            surf.blit(name, name.get_rect(center=(W // 2, 396)))
+        y = 425
+        for r in getattr(ctx, "last_results", [])[:6]:
             mark, color = ("PASS", theme.GOOD) if r.passed else ("FAIL", theme.MISS)
             row = ctx.fonts["sm"].render(
                 f"[{mark}] {r.name:<24} acc {r.mean_accuracy * 100:3.0f}%  +{r.points} pts", True, color)
             surf.blit(row, row.get_rect(center=(W // 2, y)))
-            y += 30
+            y += 28
+        if len(getattr(ctx, "last_results", [])) > 6:
+            more = ctx.fonts["sm"].render(
+                f"… and {len(ctx.last_results) - 6} more moves", True, theme.DIM)
+            surf.blit(more, more.get_rect(center=(W // 2, y)))
         ctx.particles.draw(pygame, surf)
         for b in getattr(self, "buttons", []):
             b.draw(pygame, surf, ctx.fonts["med"], ctx.t)
@@ -848,77 +1546,135 @@ class ResultsScreen(Screen):
 
 
 class SettingsScreen(Screen):
+    WINDOW_MIN, WINDOW_MAX, WINDOW_STEP = 0.05, 0.50, 0.05
+
     def enter(self) -> None:
-        self.cam = 0
-        self.tgl_mirror = Toggle(pygame.Rect(120, 300, 420, 30), "mirror choreography default", "mirror", True)
-        self.btn_cam_m = Button(pygame.Rect(120, 390, 60, 44), "−", "cam-")
-        self.btn_cam_p = Button(pygame.Rect(300, 390, 60, 44), "+", "cam+")
-        self.btn_back = Button(pygame.Rect(120, 560, 160, 48), "BACK", "back")
-        self.group = FocusGroup([self.tgl_mirror, self.btn_cam_m, self.btn_cam_p, self.btn_back])
+        self.tgl_mirror = Toggle(pygame.Rect(120, 285, 560, 34), "mirror choreography by default", "mirror", True)
+        self.tgl_full = Toggle(pygame.Rect(120, 345, 560, 34), "fullscreen", "fullscreen", False)
+        self.st_cam = Stepper(pygame.Rect(120, 405, 560, 40), "camera index", "cam", fmt=lambda v: str(int(v)))
+        self.st_win = Stepper(pygame.Rect(120, 465, 560, 40), "match window (timing tolerance)", "win",
+                              fmt=lambda v: f"{v:.2f}s")
+        self.st_vol = Stepper(pygame.Rect(120, 525, 560, 40), "music volume", "vol",
+                              fmt=lambda v: f"{v:.0f}%")
+        self.btn_back = Button(pygame.Rect(120, 610, 160, 48), "BACK", "back")
+        self.group = FocusGroup([self.tgl_mirror, self.tgl_full, self.st_cam, self.st_win,
+                                 self.st_vol, self.btn_back])
+        self._synced = False
+
+    def _save(self, ctx) -> None:
+        ctx.settings["mirror"] = self.tgl_mirror.value
+        ctx.settings["fullscreen"] = self.tgl_full.value
+        ctx.settings["camera_index"] = int(self.st_cam.value)
+        ctx.settings["window_s"] = round(self.st_win.value, 3)
+        ctx.settings["volume"] = int(self.st_vol.value)
+        save_settings(ctx.settings)
 
     def _activate(self, ctx, action: str) -> None:
         if action == "back":
-            ctx.settings["camera_index"] = self.cam
-            save_settings(ctx.settings)
+            self._save(ctx)
             ctx.manager.pop()
         elif action == "mirror":
             self.tgl_mirror.value = not self.tgl_mirror.value
-            ctx.settings["mirror"] = self.tgl_mirror.value
             ctx.mirror = self.tgl_mirror.value
-        elif action == "cam-":
-            self.cam = max(0, self.cam - 1)
-        elif action == "cam+":
-            self.cam = min(7, self.cam + 1)
+            self._save(ctx)
+        elif action == "fullscreen":
+            self.tgl_full.value = not self.tgl_full.value
+            ctx.fullscreen = self.tgl_full.value
+            self._save(ctx)
+        elif action in ("cam-", "cam+"):
+            self.st_cam.value = max(0, min(7, self.st_cam.value + (1 if action.endswith("+") else -1)))
+            self._save(ctx)
+        elif action in ("win-", "win+"):
+            d = self.WINDOW_STEP if action.endswith("+") else -self.WINDOW_STEP
+            self.st_win.value = round(max(self.WINDOW_MIN, min(self.WINDOW_MAX, self.st_win.value + d)), 2)
+            self._save(ctx)
+        elif action in ("vol-", "vol+"):
+            d = 10 if action.endswith("+") else -10
+            self.st_vol.value = max(0, min(100, self.st_vol.value + d))
+            music = getattr(ctx, "music", None)
+            if music is not None:
+                music.set_volume(self.st_vol.value / 100.0)
+            self._save(ctx)
 
     def handle_event(self, ctx, ev) -> None:
-        self.cam = int(ctx.settings.get("camera_index", 0)) if not getattr(self, "_touched", False) else self.cam
-        items = [self.tgl_mirror, self.btn_cam_m, self.btn_cam_p, self.btn_back]
+        items = [self.tgl_mirror, self.tgl_full, self.st_cam, self.st_win,
+                 self.st_vol, self.btn_back]
         if ev.type == pygame.MOUSEMOTION:
             for i in items:
                 i.hovered = i.contains(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            for st in (self.st_cam, self.st_win, self.st_vol):
+                act = st.action_at(ev.pos)
+                if act:
+                    self._activate(ctx, act)
+                    return
             for i in items:
                 if i.contains(ev.pos):
-                    self._touched = True
                     self._activate(ctx, i.action)
         elif ev.type == pygame.KEYDOWN:
             if ev.key in (pygame.K_DOWN, pygame.K_s):
                 self.group.move(1)
             elif ev.key in (pygame.K_UP, pygame.K_w):
                 self.group.move(-1)
+            elif ev.key in (pygame.K_LEFT, pygame.K_a):
+                self._adjust_focused(ctx, -1)
+            elif ev.key in (pygame.K_RIGHT, pygame.K_d):
+                self._adjust_focused(ctx, 1)
             elif ev.key in (pygame.K_RETURN, pygame.K_SPACE):
-                self._touched = True
-                self._activate(ctx, self.group.current.action)
+                self._adjust_focused(ctx, 1)
             elif ev.key == pygame.K_ESCAPE:
                 self._activate(ctx, "back")
 
+    def _adjust_focused(self, ctx, direction: int) -> None:
+        cur = self.group.current
+        if cur is self.tgl_mirror:
+            self._activate(ctx, "mirror")
+        elif cur is self.tgl_full:
+            self._activate(ctx, "fullscreen")
+        elif cur is self.st_cam:
+            self._activate(ctx, "cam+" if direction > 0 else "cam-")
+        elif cur is self.st_win:
+            self._activate(ctx, "win+" if direction > 0 else "win-")
+        elif cur is self.st_vol:
+            self._activate(ctx, "vol+" if direction > 0 else "vol-")
+        elif cur is self.btn_back:
+            self._activate(ctx, "back")
+
     def update(self, ctx, dt) -> None:
-        if not getattr(self, "_synced", False):
+        if not self._synced:
             self.tgl_mirror.value = bool(ctx.settings.get("mirror", True))
-            self.cam = int(ctx.settings.get("camera_index", 0))
+            self.tgl_full.value = bool(ctx.settings.get("fullscreen", False))
+            self.st_cam.value = float(int(ctx.settings.get("camera_index", 0)))
+            self.st_win.value = float(ctx.settings.get("window_s", ctx.cfg.window_s))
+            self.st_vol.value = float(ctx.settings.get("volume", 80))
             self._synced = True
-        for b in (self.btn_cam_m, self.btn_cam_p, self.btn_back):
-            b.update(dt)
+        for i in (self.st_cam, self.st_win, self.st_vol, self.btn_back):
+            i.update(dt)
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
-        _title(pygame, ctx, surf, ctx.t, y=70)
-        surf.blit(ctx.fonts["med"].render("SETTINGS", True, theme.CYAN), (120, 240))
-        self.tgl_mirror.draw(pygame, surf, ctx.fonts["sm"])
-        surf.blit(ctx.fonts["sm"].render("camera index", True, theme.TEXT), (120, 370))
-        val = ctx.fonts["med"].render(str(self.cam), True, theme.GOLD)
-        surf.blit(val, val.get_rect(center=(245, 412)))
-        self.btn_cam_m.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        self.btn_cam_p.draw(pygame, surf, ctx.fonts["med"], ctx.t)
-        note = ctx.fonts["sm"].render("camera applies on next open", True, theme.DIM)
-        surf.blit(note, (120, 450))
-        self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
+        _title(pygame, ctx, surf, ctx.t, y=64)
+        f_sm, f_med = ctx.fonts["sm"], ctx.fonts["med"]
+        surf.blit(f_med.render("SETTINGS", True, theme.CYAN), (120, 235))
+        self.tgl_mirror.draw(pygame, surf, f_sm)
+        self.tgl_full.draw(pygame, surf, f_sm)
+        self.st_cam.draw(pygame, surf, f_sm)
+        self.st_win.draw(pygame, surf, f_sm)
+        self.st_vol.draw(pygame, surf, f_sm)
+        note = f_sm.render(
+            "camera + match window apply on the next dance · F11 toggles fullscreen anywhere",
+            True, theme.DIM)
+        surf.blit(note, (120, 578))
+        _dim_strip(pygame, surf, (W // 2 - 260, H - 44, 520, 34))
+        hint = f_sm.render("←/→ adjust · ENTER toggle · ESC save & back", True, theme.DIM)
+        surf.blit(hint, hint.get_rect(center=(W // 2, H - 26)))
+        self.btn_back.draw(pygame, surf, f_med, ctx.t)
 
 
 class ScoresScreen(Screen):
     def enter(self) -> None:
         self.scores = load_scores()
-        self.btn_back = Button(pygame.Rect(120, 600, 160, 48), "BACK", "back")
+        self.btn_back = Button(pygame.Rect(120, 620, 160, 48), "BACK", "back")
 
     def handle_event(self, ctx, ev) -> None:
         if ev.type == pygame.MOUSEBUTTONDOWN and self.btn_back.contains(ev.pos):
@@ -928,15 +1684,20 @@ class ScoresScreen(Screen):
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
-        _title(pygame, ctx, surf, ctx.t, y=70)
-        surf.blit(ctx.fonts["med"].render("HIGH SCORES", True, theme.GOLD), (120, 200))
+        _title(pygame, ctx, surf, ctx.t, y=64)
+        f_sm, f_med = ctx.fonts["sm"], ctx.fonts["med"]
+        surf.blit(f_med.render("HIGH SCORES", True, theme.GOLD), (120, 190))
         if not self.scores:
-            surf.blit(ctx.fonts["sm"].render("no runs recorded yet — go dance!", True, theme.DIM), (120, 260))
-        y = 250
+            surf.blit(f_sm.render("no runs recorded yet — go dance!", True, theme.DIM), (120, 250))
+            self.btn_back.draw(pygame, surf, f_med, ctx.t)
+            return
+        header = f_sm.render(f"{'#':>2}  {'SCORE':>6}  GRD   ACC   COMBO  DANCE", True, theme.DIM)
+        surf.blit(header, (120, 240))
+        y = 268
         for i, s in enumerate(self.scores):
-            line = (f"{i + 1:>2}. {s['score']:>6}  [{s['grade']}]  {s['mean_accuracy'] * 100:3.0f}%  "
-                    f"combo {s['best_combo']:>3}  {Path(s['video']).name[:28]}")
-            color = theme.GOLD if i == 0 else theme.TEXT
-            surf.blit(ctx.fonts["sm"].render(line, True, color), (120, y))
+            line = (f"{i + 1:>2}. {s['score']:>6}   [{s['grade']}]  {s['mean_accuracy'] * 100:3.0f}%"
+                    f"   {s['best_combo']:>4}   {Path(s['video']).name[:30]}")
+            color = theme.GOLD if i == 0 else (theme.TEXT if i < 3 else theme.DIM)
+            surf.blit(f_sm.render(line, True, color), (120, y))
             y += 32
-        self.btn_back.draw(pygame, surf, ctx.fonts["med"], ctx.t)
+        self.btn_back.draw(pygame, surf, f_med, ctx.t)
