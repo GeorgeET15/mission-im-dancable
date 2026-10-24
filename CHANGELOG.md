@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T22:25:00+0530 — Milestone 3: rhythm-game layer + pygame UI
+
+- Changed: Added `game.py` (UI-independent GameSession: BRIEFING/ACTIVE/RESULT/COMPLETE phases, interval-gated scoring at 0.25 s so points can't scale with FPS, duplicate-frame protection via frame_id, combo/multiplier, pass/fail with mean-accuracy + reliable-fraction thresholds, retry and mission scorecard). Extended `scoring.py` with joint-angle comparison (`JOINTS`, `angle_errors`, `PoseAnalysis`, `analyze_pose`, `describe_angle_correction`, `joint_angle_deg`) and widened CorrectionTracker to string hints. Added `game_ui.py` — pygame-ce mission-control UI (reference vs live panels, score/combo/accuracy HUD, briefing/result/pause/scorecard screens, loading + fatal-error states). Shared helpers: `window_indices`/`nearest_index` in reference.py, `fit_keypoints` in render.py (practice.py refactored to reuse). New `--game` flag; OpenCV tracker and practice remain as fallbacks. 24 new tests.
+- Why: Third milestone — turn the practice prototype into a playable rhythm game with score, combo, and mission progression.
+- Validation: `python -m pytest tests/` → 79 passed (interval gating, FPS-independence, duplicate-frame rejection, combo math, pass/retry, scorecard totals, angle errors incl. mirroring and missing landmarks). `--game` ran ~15 s on the desktop display on CUDA without errors. Interactive key flow (SPACE/R/P/M) untested beyond code review.
+- Limitations: No full playthrough against a real dancer yet; reference still renders as skeleton only; move segmentation still manual; pause/overlay screens verified only by smoke run.
+
 ## 2026-10-24T22:15:00+0530 — Milestone 2: reference choreography + practice mode
 
 - Changed: Added `reference.py` (ReferenceChoreography model, offline pose extraction at configurable `--sample-fps`, `.npz` cache with staleness checks on video size/mtime, sample rate, model, confidence, and cache version), `moves.py` (JSON move segmentation with validation), `scoring.py` (confidence-aware normalized pose scoring, window matching, worst-mismatch + direction hints, mirroring, score smoothing, correction hysteresis), `practice.py` (side-by-side practice loop with per-move looping and N/P/Q controls). New CLI flags: `--source`, `--moves`, `--sample-fps`, `--window`, `--mirror`, `--cache-dir`. `.gitignore` now covers `cache/`; 34 new tests. Fixed two bugs caught by tests: cache compared the stored sample rate against itself instead of the requested one, and the correction tracker delayed the first correction by `hold_frames`.

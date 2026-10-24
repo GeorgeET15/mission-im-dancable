@@ -31,6 +31,29 @@ def draw_pose(frame: np.ndarray, keypoints: np.ndarray, conf_threshold: float) -
     return frame
 
 
+def fit_keypoints(
+    keypoints: np.ndarray,
+    src_w: int,
+    src_h: int,
+    dst_x: float,
+    dst_y: float,
+    dst_w: float,
+    dst_h: float,
+    fill: float = 0.9,
+) -> np.ndarray:
+    """Scale keypoints from source frame coords into a destination rect.
+
+    Uniform scaling centred in the rect; confidence column is untouched.
+    """
+    out = keypoints.copy()
+    if src_w <= 0 or src_h <= 0:
+        return out
+    scale = min(dst_w / src_w, dst_h / src_h) * fill
+    out[:, 0] = out[:, 0] * scale + dst_x + (dst_w - src_w * scale) / 2
+    out[:, 1] = out[:, 1] * scale + dst_y + (dst_h - src_h * scale) / 2
+    return out
+
+
 def draw_hud(
     frame: np.ndarray,
     fps: float,

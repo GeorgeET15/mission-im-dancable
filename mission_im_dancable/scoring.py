@@ -6,14 +6,28 @@ score is invariant to where the dancer stands and how big they appear.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
-from .geometry import KEYPOINT_NAMES, normalize_keypoints
+from .geometry import KEYPOINT_NAMES, joint_angle, normalize_keypoints
 
 # Left/right keypoint index pairs swapped when mirroring the reference.
 MIRROR_PAIRS = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16)]
+
+# Joints compared by angle: (name, a, b, c) measures the angle at b.
+JOINTS = [
+    ("left elbow", 5, 7, 9),
+    ("right elbow", 6, 8, 10),
+    ("left shoulder", 11, 5, 7),
+    ("right shoulder", 12, 6, 8),
+    ("left hip", 5, 11, 13),
+    ("right hip", 6, 12, 14),
+    ("left knee", 11, 13, 15),
+    ("right knee", 12, 14, 16),
+]
+
+ANGLE_MISMATCH_DEG = 25.0  # angle error above this counts as a real mismatch
 
 SCORE_SCALE = 4.0  # exp(-SCORE_SCALE * mean_error) → higher = stricter
 MIN_RELIABLE_KEYPOINTS = 6  # fewer than this and we refuse to score
@@ -129,6 +143,82 @@ def describe_correction(
     return f"{KEYPOINT_NAMES[keypoint_index].replace('_', ' ')}: move {direction}"
 
 
+def _joint_conf_ok(kpts: np.ndarray, indices: tuple[int, int, int], conf_threshold: float) -> bool:
+    return all(kpts[i, 2] >= conf_threshold for i in indices)
+
+
+def angle_errors(
+    live: np.ndarray, reference: np.ndarray, conf_threshold: float
+) -> dict[str, float]:
+    """Absolute joint-angle differences in degrees for reliable joints.
+
+    A joint counts only when all three landmarks clear the confidence
+    threshold in BOTH poses. Unreliable or degenerate joints are omitted.
+    """
+    errors: dict[str, float] = {}
+    for name, a, b, c in JOINTS:
+        if not (
+            _joint_conf_ok(live, (a, b, c), conf_threshold)
+            and _joint_conf_ok(reference, (a, b, c), conf_threshold)
+        ):
+            continue
+        live_deg = joint_angle(live[a, :2], live[b, :2], live[c, :2])
+        ref_deg = joint_angle(reference[a, :2], reference[b, :2], reference[c, :2])
+        if np.isfinite(live_deg) and np.isfinite(ref_deg):
+            errors[name] = abs(live_deg - ref_deg)
+    return errors
+
+
+@dataclass
+class PoseAnalysis:
+    """Combined positional + joint-angle comparison of two poses."""
+
+    pose_score: PoseScore
+    angle_errors: dict[str, float]
+
+    def worst_angle(self) -> tuple[str, float] | None:
+        """(joint name, error degrees) of the worst joint, or None."""
+        if not self.angle_errors:
+            return None
+        name = max(self.angle_errors, key=self.angle_errors.get)
+        if self.angle_errors[name] < ANGLE_MISMATCH_DEG:
+            return None
+        return name, self.angle_errors[name]
+
+
+def analyze_pose(
+    live: np.ndarray, reference: np.ndarray, conf_threshold: float
+) -> PoseAnalysis | None:
+    """Score a pose positionally and by joint angles. None when unreliable."""
+    pose_score = score_pose(live, reference, conf_threshold)
+    if pose_score is None:
+        return None
+    return PoseAnalysis(
+        pose_score=pose_score,
+        angle_errors=angle_errors(live, reference, conf_threshold),
+    )
+
+
+def describe_angle_correction(
+    joint_name: str, live_deg: float, ref_deg: float
+) -> str:
+    """Correction hint for a joint angle, e.g. 'left elbow: straighten'."""
+    if live_deg < ref_deg:
+        return f"{joint_name}: straighten more"
+    return f"{joint_name}: bend more"
+
+
+def joint_angle_deg(
+    kpts: np.ndarray, name: str
+) -> float | None:
+    """Live angle in degrees for a named joint, or None if unavailable."""
+    for jname, a, b, c in JOINTS:
+        if jname == name:
+            deg = joint_angle(kpts[a, :2], kpts[b, :2], kpts[c, :2])
+            return deg if np.isfinite(deg) else None
+    return None
+
+
 class ScoreSmoother:
     """Exponential moving average so the displayed score does not jitter."""
 
@@ -162,11 +252,11 @@ class CorrectionTracker:
     """
 
     hold_frames: int = 10
-    _current: int | None = None
-    _candidate: int | None = None
+    _current: int | str | None = None
+    _candidate: int | str | None = None
     _candidate_count: int = 0
 
-    def update(self, mismatch: int | None) -> int | None:
+    def update(self, mismatch: int | str | None) -> int | str | None:
         # No current correction → adopt the first mismatch immediately;
         # hysteresis only protects against *changing* the hint every frame.
         if self._current is None and mismatch is not None:
@@ -190,5 +280,5 @@ class CorrectionTracker:
         return self._current
 
     @property
-    def current(self) -> int | None:
+    def current(self) -> int | str | None:
         return self._current

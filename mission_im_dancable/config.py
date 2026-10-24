@@ -24,6 +24,7 @@ class AppConfig:
     window_s: float = 0.15
     mirror: bool = False
     cache_dir: Path = Path("cache")
+    game: bool = False  # pygame rhythm-game mode instead of OpenCV practice
 
 
 def resolve_device(requested: str, cuda_available: bool) -> str:
@@ -102,6 +103,11 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         default=Path("cache"),
         help="directory for extracted-pose caches (default: cache/)",
     )
+    parser.add_argument(
+        "--game",
+        action="store_true",
+        help="rhythm-game mode (pygame) instead of the OpenCV practice view",
+    )
     args = parser.parse_args(argv)
 
     if args.width <= 0 or args.height <= 0:
@@ -114,6 +120,8 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         parser.error("--window must be >= 0")
     if args.moves and not args.source:
         parser.error("--moves requires --source")
+    if args.game and not args.source:
+        parser.error("--game requires --source VIDEO")
 
     return AppConfig(
         camera_index=args.camera,
@@ -128,4 +136,5 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         window_s=args.window,
         mirror=args.mirror,
         cache_dir=args.cache_dir,
+        game=args.game,
     )

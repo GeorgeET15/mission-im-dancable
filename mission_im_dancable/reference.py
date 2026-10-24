@@ -57,6 +57,26 @@ class ReferenceChoreography:
         return int((self.keypoints[:, :, 2].max(axis=1) > 0).sum())
 
 
+def window_indices(choreo: ReferenceChoreography, t: float, window_s: float) -> np.ndarray:
+    """Sample indices whose timestamps fall within t ± window_s."""
+    ts = choreo.timestamps
+    lo = np.searchsorted(ts, t - window_s)
+    hi = np.searchsorted(ts, t + window_s, side="right")
+    return np.arange(lo, hi)
+
+
+def nearest_index(choreo: ReferenceChoreography, t: float) -> int | None:
+    """Index of the sample closest to t, or None for an empty choreography."""
+    ts = choreo.timestamps
+    if ts.size == 0:
+        return None
+    i = int(np.searchsorted(ts, t))
+    candidates = [j for j in (i - 1, i) if 0 <= j < ts.size]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda j: abs(ts[j] - t))
+
+
 def sampled_frame_indices(frame_count: int, video_fps: float, sample_fps: float) -> list[int]:
     """Frame indices to run inference on for the requested sample rate."""
     if frame_count <= 0 or video_fps <= 0 or sample_fps <= 0:

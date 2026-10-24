@@ -17,6 +17,8 @@ from .reference import (
     ReferenceChoreography,
     ReferenceVideoError,
     load_or_extract,
+    nearest_index,
+    window_indices,
 )
 from .render import draw_pose
 from .scoring import (
@@ -71,27 +73,15 @@ class PracticeSession:
             span = max(move.duration, 1e-6)
             self.time = move.start + (self.time - move.start) % span
 
-    def _window_indices(self) -> np.ndarray:
-        """Sample indices whose timestamps fall inside the match window."""
-        ts = self.choreo.timestamps
-        lo = np.searchsorted(ts, self.time - self.window_s)
-        hi = np.searchsorted(ts, self.time + self.window_s, side="right")
-        return np.arange(lo, hi)
-
     def window_keypoints(self) -> np.ndarray:
-        return self.choreo.keypoints[self._window_indices()]
+        return self.choreo.keypoints[
+            window_indices(self.choreo, self.time, self.window_s)
+        ]
 
     def nearest_keypoints(self) -> np.ndarray | None:
         """Closest sampled reference pose to the current time (for display)."""
-        ts = self.choreo.timestamps
-        if ts.size == 0:
-            return None
-        i = int(np.searchsorted(ts, self.time))
-        candidates = [j for j in (i - 1, i) if 0 <= j < ts.size]
-        if not candidates:
-            return None
-        best = min(candidates, key=lambda j: abs(ts[j] - self.time))
-        return self.choreo.keypoints[best]
+        i = nearest_index(self.choreo, self.time)
+        return self.choreo.keypoints[i] if i is not None else None
 
 
 def _scaled_panel_pose(

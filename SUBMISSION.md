@@ -25,9 +25,9 @@ Participate solo or in a team of up to 4. Remove unused rows.
 - **Install command:** `pip install -r requirements-torch-cuda.txt && pip install -r requirements.txt` (use `requirements-torch-cpu.txt` on CPU-only machines).
 - **Required environment variable names:** None.
 - **Start command:** `python -m mission_im_dancable`
-- **Demo walkthrough:** Tracker demo: `python -m mission_im_dancable` — camera feed with skeleton overlay and FPS HUD (Q/Esc quits). Practice demo: `python -m mission_im_dancable --source dance.mp4 --moves moves.json --mirror` — reference skeleton (left) vs. your live skeleton (right), per-move looping, match percentage and one correction hint (N/P switch moves).
-- **Checks performed and results:** CUDA available and GPU-named correctly; YOLO11n-Pose inference ~11 ms on test image; 55/55 unit tests pass; extraction + caching verified on a synthetic clip; live tracker and practice mode both ran on the desktop display. Live practice with a real dancer is untested.
-- **Known limitations or incomplete features:** No scoring history/combos/levels yet; reference shown as skeleton rather than video pixels; move segmentation is manual; real-dancer accuracy unverified. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
+- **Demo walkthrough:** Game demo: `python -m mission_im_dancable --game --source dance.mp4 --moves moves.json --mirror` — mission-control UI; SPACE starts each objective, perform to the looping reference, score + combo + accuracy HUD, R retries failed moves, scorecard at the end. Fallbacks: `python -m mission_im_dancable --source dance.mp4` (OpenCV practice), `python -m mission_im_dancable` (live tracker).
+- **Checks performed and results:** CUDA verified on RTX 3060; YOLO11n-Pose ~11 ms/frame; 79/79 unit tests pass; extraction + caching verified on a synthetic clip; tracker, practice, and game windows all ran on the desktop display. A full game run against a real dancer is untested.
+- **Known limitations or incomplete features:** Real-dancer playthrough unverified; reference shown as skeleton rather than video pixels; move segmentation is manual. `pygame-ce` used instead of `pygame` (no Python 3.14 wheels).
 - **Libraries, APIs, and public datasets used:** Ultralytics YOLO11 (AGPL-3.0) + `yolo11n-pose.pt` weights + `bus.jpg` sample image; PyTorch cu128; OpenCV; NumPy; pygame-ce; pytest.
 - **AI usage record:** [AI_USAGE.md](AI_USAGE.md)
 - **Development change log:** [CHANGELOG.md](CHANGELOG.md)
