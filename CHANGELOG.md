@@ -4,6 +4,13 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-24T23:05:00+0530 — Real-time gameplay verification + fixes
+
+- Changed: Added `tests/test_gameplay.py` — 6 headless tests driving `PlayScreen.update` with fake camera/tracker/clock: practice mode dt-advance + pause, performance scoring cadence, unreliable-pose combo breaks, camera-failure-as-miss, pause committing nothing, and the RESULT→COMPLETE→ResultsScreen handoff. Fixed `TextField.contains` crash and numpy-float pygame draw crash on the select screen.
+- Why: Prove the continuous scoring path end-to-end without a webcam, per milestone requirement that score/combo/judgements reflect actual evaluated poses.
+- Validation: `pytest` → 109 passed; `--game` ran ~12 s on display; clicks on the select screen verified working by user (after contains fix).
+- Limitations: Live webcam gameplay with a real dancer still untested; results flow verified only via headless test.
+
 ## 2026-10-24T22:50:00+0530 — Dance-arcade pygame UI
 
 - Changed: Replaced the mission-control `game_ui.py` with a `ui/` package — `theme.py` (neon palette, gradient, dance floor, spotlights, equalizer, particles, glow text), `widgets.py` (Button/Toggle/ProgressBar/TextField/FocusGroup), `nav.py` (pygame-free Navigator with fade + input lock), `screens.py` (Home/Select/Play/Results/Settings/Scores + AppContext), `app.py` (`run_arcade` with resizable letterboxed canvas). Added `persist.py` (settings + high scores under XDG config/data dirs), `Judgement`/`judge()`/`grade_for()` in game.py, `on_progress` callback for extraction (background-threaded on the select screen). `--game` no longer requires `--source` — the video is picked in the UI. 8 new tests.
