@@ -1,6 +1,6 @@
-# Mission Im-Dancable
+# Mission I'm-Dancable
 
-*Your mission, should you choose to accept it.*
+_Your mission, should you choose to accept it._
 
 An AI-powered dance-teaching rhythm game built at DevDay Exchange Community Hackathon: Kochi (10–11 October 2026). Learn choreography one move at a time, match your skeleton to reference poses, and score combos like a rhythm game.
 
@@ -8,16 +8,16 @@ An AI-powered dance-teaching rhythm game built at DevDay Exchange Community Hack
 
 ## Event details
 
-| Detail | Information |
-| --- | --- |
-| Venue | JAIN University, Kochi |
-| Location | [Open the venue map](https://maps.app.goo.gl/Eme7gR7NDXSNRANu5) |
-| Rooms | 2008 and 2009 |
-| Check-in | 10 October 2026, 6:00 PM IST |
-| Kick-off | 10 October 2026, 6:30 PM IST |
-| Wrap-up | 11 October 2026, by 10:00 AM IST |
-| Participation | Solo or a team of up to 4 participants |
-| Theme | Open — build anything you like |
+| Detail        | Information                                                     |
+| ------------- | --------------------------------------------------------------- |
+| Venue         | JAIN University, Kochi                                          |
+| Location      | [Open the venue map](https://maps.app.goo.gl/Eme7gR7NDXSNRANu5) |
+| Rooms         | 2008 and 2009                                                   |
+| Check-in      | 10 October 2026, 6:00 PM IST                                    |
+| Kick-off      | 10 October 2026, 6:30 PM IST                                    |
+| Wrap-up       | 11 October 2026, by 10:00 AM IST                                |
+| Participation | Solo or a team of up to 4 participants                          |
+| Theme         | Open — build anything you like                                  |
 
 Keep your approved Luma QR code ready for entry, and bring your laptop and charger. Eligible checked-in participants will receive Codex credits and OpenAI API credits.
 
@@ -43,7 +43,7 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
    # or: pip install -r requirements-torch-cpu.txt  # CPU-only machines
    pip install -r requirements.txt
    ```
-4. **Model weights:** place `yolo11l-pose.pt` in `models/` (see *Model weights* below).
+4. **Model weights:** place `yolo11l-pose.pt` in `models/` (see _Model weights_ below).
 5. **Start the live pose tracker:**
    ```bash
    python -m mission_im_dancable
@@ -85,9 +85,13 @@ Keep your approved Luma QR code ready for entry, and bring your laptop and charg
   "title": "My dance",
   "difficulty": "medium",
   "moves": [
-    {"name": "intro sway", "start": 0.0, "end": 2.4,
-     "instruction": "shift weight left to right"},
-    {"name": "step touch", "start": 2.4, "end": 6.0}
+    {
+      "name": "intro sway",
+      "start": 0.0,
+      "end": 2.4,
+      "instruction": "shift weight left to right"
+    },
+    { "name": "step touch", "start": 2.4, "end": 6.0 }
   ]
 }
 ```
@@ -117,7 +121,7 @@ HOME → CHOOSE YOUR DANCE — LEARN (type a path, click a detected-video card, 
 - **Controls:** SPACE play/pause · ←/→ seek ±2 s · ,/. step one video frame · N/P next/previous segment (or click a segment block on the timeline) · L loop — off → selected segment → whole dance · -/= playback speed (0.25×–1×) · K mark the selected segment learning → practicing → mastered · E open the segment editor · M mirror · Q back. Buttons cover the same controls for mouse use.
 - **Segment editor (E):** B splits the segment under the playhead, X merges with the next, [ ] nudges a boundary ±0.1 s, ↑/↓ selects, PgUp/PgDn reorders, N names the segment, ENTER preview-loops it, G generates a suggested draft (every-8th-beat cuts, or pose-motion stillness when no beat grid), A accepts suggestions, S saves to `<stem>.moves.json` (asks before overwriting). Suggested drafts render gold until accepted; saving reloads segments into every mode.
 - **Feedback:** match % and the single biggest correction ("right shoulder: move up-left") — guidance only, never a score. Audio follows the playhead only at 1× speed.
-- **Progress:** visiting a segment marks it *learning*; K cycles it through *practicing* and *mastered*. Marks are stored per dance in the user data dir — self-reported progress, never auto-judged from pose data.
+- **Progress:** visiting a segment marks it _learning_; K cycles it through _practicing_ and _mastered_. Marks are stored per dance in the user data dir — self-reported progress, never auto-judged from pose data.
 - **Camera:** opens in the background; if it fails, Learn Mode keeps working as a watch-only viewer and R retries — the lesson never blocks on hardware.
 
 #### Play Mode
