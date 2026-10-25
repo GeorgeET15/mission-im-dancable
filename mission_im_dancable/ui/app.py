@@ -20,7 +20,9 @@ from .screens import (
     H,
     close_camera,
 )
+from .widgets import Button
 from ..lobby import LobbyMusic
+from ..sfx import Sfx
 
 _MENU_SCREENS = (HomeScreen, SelectScreen, BrowseScreen, SettingsScreen, ScoresScreen)
 
@@ -63,6 +65,8 @@ def run_arcade(cfg: AppConfig) -> int:
     ctx.music.set_volume(float(ctx.settings.get("volume", 80)) / 100.0)
     ctx.lobby = LobbyMusic(enabled=audio_ok,
                            volume=float(ctx.settings.get("volume", 80)) / 250.0)
+    ctx.sfx = Sfx(enabled=audio_ok, volume=float(ctx.settings.get("volume", 80)) / 160.0)
+    Button.on_press = ctx.sfx.click  # every button press clicks — mouse or key
     applied_fullscreen = False
     if ctx.fullscreen:
         window = _apply_fullscreen(pygame, True)

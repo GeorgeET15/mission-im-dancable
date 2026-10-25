@@ -8,7 +8,14 @@ from . import theme
 
 
 class Button:
-    """Clickable button with hover, keyboard-focus, and press states."""
+    """Clickable button with hover, keyboard-focus, and press states.
+
+    ``on_press`` is a class-level no-arg hook fired from :meth:`press` —
+    the app wires it to the UI click sound so every button (mouse or
+    keyboard) clicks without the widget knowing about audio.
+    """
+
+    on_press = None
 
     def __init__(self, rect, label: str, action: str, primary: bool = False, enabled: bool = True):
         self.rect = rect
@@ -25,6 +32,11 @@ class Button:
 
     def press(self) -> None:
         self._press_t = 0.15
+        if Button.on_press is not None:
+            try:
+                Button.on_press()
+            except Exception:
+                pass  # sfx must never break input
 
     def update(self, dt: float) -> None:
         self._press_t = max(0.0, self._press_t - dt)

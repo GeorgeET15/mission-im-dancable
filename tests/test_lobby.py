@@ -1,8 +1,10 @@
-"""Lobby music: synth track shape + channel wrapper safety."""
+"""Lobby music + UI sfx: synth shapes and safe wrappers."""
 
 import numpy as np
 
 from mission_im_dancable.lobby import LobbyMusic, lobby_samples
+from mission_im_dancable.sfx import Sfx, click_samples
+from mission_im_dancable.ui.widgets import Button
 
 
 def test_lobby_samples_stereo_int16():
@@ -27,3 +29,37 @@ def test_lobby_disabled_noops():
     m.stop()
     m.set_volume(0.9)
     assert m._channel is None
+
+
+def test_click_samples_short_stereo():
+    arr = click_samples()
+    assert arr.ndim == 2 and arr.shape[1] == 2 and arr.dtype == np.int16
+    assert arr.shape[0] / 44100 < 0.15  # a tap, not a tone
+
+
+def test_sfx_disabled_noops():
+    s = Sfx(enabled=False)
+    s.click()
+    s.set_volume(0.2)
+
+
+def test_button_press_fires_hook():
+    import pygame
+
+    calls = []
+    Button.on_press = lambda: calls.append(1)
+    try:
+        Button(pygame.Rect(0, 0, 10, 10), "x", "x").press()
+        assert calls == [1]
+    finally:
+        Button.on_press = None
+
+
+def test_button_press_survives_hook_errors():
+    import pygame
+
+    Button.on_press = lambda: 1 / 0
+    try:
+        Button(pygame.Rect(0, 0, 10, 10), "x", "x").press()  # must not raise
+    finally:
+        Button.on_press = None

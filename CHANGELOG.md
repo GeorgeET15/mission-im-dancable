@@ -4,6 +4,12 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T08:35:00+05:30 — UI click sound effects
+
+- Changed: `sfx.py` — synthesized ~70 ms click blip (downward chirp, numpy → int16 stereo) played via `pygame.mixer.Sound` on whatever channel is free; `Sfx` wrapper is a safe no-op without a mixer and scales to the music-volume setting. `Button` gained a class-level `on_press` hook fired inside `press()` — `app.py` binds it to `Sfx.click`, so every button (mouse or keyboard-activated) clicks without widgets knowing about audio. Hook errors are swallowed so sfx can never break input.
+- Why: request for button-click feedback matching the arcade feel.
+- Validation: 223/223 tests (4 new: blip shape, disabled no-ops, hook fires, hook-error resilience).
+
 ## 2026-10-25T08:15:00+05:30 — Title readability + synthesized lobby music
 
 - Changed: Title font switched from bold mono to a clean sans stack (`ubuntusans,dejavusans,liberationsans`) — the mono glyphs plus glow halo were hard to read. Title text is now "MISSION I'M-DANCABLE" (apostrophe kept, wording unchanged per owner). SelectScreen start button widened 190→240 px so "START LEARNING"/"START DANCING" no longer overflow their border.
