@@ -432,9 +432,9 @@ def _download_video(url: str, cache_dir: Path) -> Path:
     dl_dir = cache_dir / "downloads"
     dl_dir.mkdir(parents=True, exist_ok=True)
     opts = {
-        # prefer h264 (cv2 always decodes it); fall back to anything and
+        # prefer h264 ≤1080p (cv2 decodes it, enough detail for pose);
         # transcode below — never "format not available" on DASH-only videos
-        "format": "bv*[height<=720][vcodec^=avc]+ba/b[height<=720][vcodec^=avc]/bv*+ba/b",
+        "format": "bv*[height<=1080][vcodec^=avc]+ba/b[height<=1080][vcodec^=avc]/bv*+ba/b",
         "outtmpl": str(dl_dir / "%(id)s.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
