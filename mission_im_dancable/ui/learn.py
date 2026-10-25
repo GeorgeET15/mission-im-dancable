@@ -38,8 +38,8 @@ from .screens import (
 )
 from .widgets import Button, TextField, TimelineBar
 
-REF_RECT = (60, 190, 560, 350)
-CAM_RECT = (660, 190, 560, 350)
+REF_RECT = (60, 195, 480, 345)
+CAM_RECT = (580, 195, 640, 345)  # camera owns the whole right half
 STATUS_COLORS = {"learning": theme.VIOLET, "practicing": theme.CYAN, "mastered": theme.GOLD}
 
 
@@ -463,7 +463,8 @@ class LearnScreen(Screen):
                                 (CAM_RECT, "YOU", theme.CYAN)):
             pygame.draw.rect(surf, theme.PANEL, r)
             pygame.draw.rect(surf, theme.PANEL_EDGE, r, 1, border_radius=4)
-            _panel_label(pygame, ctx, surf, label, r[0] + 12, r[1] - 24, color)
+            # label inside the corner — keeps the header row uncluttered
+            _chip(pygame, ctx, surf, label, (r[0] + 58, r[1] + 22), color)
         pose = pose_at(ctx.choreo, s.time)
         if pose is not None and pose[:, 2].max() > 0:
             shown = mirror_keypoints(pose, ctx.choreo.width) if ctx.mirror else pose
@@ -486,11 +487,12 @@ class LearnScreen(Screen):
                 msg, color = f"camera unavailable — {self.cam_err or ''}"[:56], theme.MISS
             else:
                 msg, color = "watch mode — no camera", theme.DIM
+            cx, cy = CAM_RECT[0] + CAM_RECT[2] // 2, CAM_RECT[1] + CAM_RECT[3] // 2
             txt = ctx.fonts["sm"].render(msg, True, color)
-            surf.blit(txt, txt.get_rect(center=(CAM_RECT[0] + 280, CAM_RECT[1] + 175)))
+            surf.blit(txt, txt.get_rect(center=(cx, cy - 14)))
             if self.cam_state == "error":
                 sub = ctx.fonts["sm"].render("R retry — the reference still plays", True, theme.DIM)
-                surf.blit(sub, sub.get_rect(center=(CAM_RECT[0] + 280, CAM_RECT[1] + 210)))
+                surf.blit(sub, sub.get_rect(center=(cx, cy + 18)))
 
     def draw(self, ctx, surf) -> None:
         self._ensure(ctx)
@@ -506,7 +508,7 @@ class LearnScreen(Screen):
         surf.blit(f_med.render(f"LEARN — {title}{diff}", True, theme.CYAN), (60, 148))
         if getattr(ctx, "moves_path", None) is None and len(s.moves) > 1:
             auto = f_sm.render("auto-segments · E to refine", True, theme.GOLD)
-            surf.blit(auto, (640, 152))
+            surf.blit(auto, (60, 172))
         key_text = (
             "B split · X merge · [ ] nudge · ↑/↓ select · PgUp/Dn reorder · N name · ENTER preview · G suggest · A accept · S save · E done"
             if self.editing else
@@ -548,9 +550,10 @@ class LearnScreen(Screen):
             if self._warn:
                 surf.blit(f_sm.render(self._warn[:80], True, theme.GOLD), (60, 594))
         else:
-            hint = self.hint or ("copy the pose — no score here" if self.cam_state == "ready" else "")
-            if hint:
-                surf.blit(f_sm.render(hint[:70], True, theme.MISS if self.hint else theme.DIM), (60, 594))
+            # correction hint lives inside the reference panel as a chip
+            if self.hint:
+                _chip(pygame, ctx, surf, self.hint[:40],
+                      (REF_RECT[0] + REF_RECT[2] // 2, REF_RECT[1] + REF_RECT[3] - 28), theme.MISS)
 
         # seekable segment timeline + progress marks
         if self.editing:

@@ -4,6 +4,10 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T09:50:00+05:30 — Learn layout declutter + static title
+
+- Changed: `_title` no longer bobs — heading stays fixed per owner request. Learn screen reworked: camera panel widened to the full right half (640 px vs 560), REFERENCE/YOU labels moved inside their panels as chips (was colliding with the header), "auto-segments" badge moved under the LEARN title, the pose-correction hint is now a chip inside the reference panel instead of a bottom text row overlapping the timeline, camera-status text centers on the panel instead of a hardcoded offset.
+
 ## 2026-10-25T09:20:00+05:30 — Play grace windows, auto-segmentation, stale-audio fix
 
 - Changed: `PlaySession` regains the grace mechanic inside the continuous run — when a segment ends without passing, the run enters `GamePhase.GRACE`: the playhead loops inside that segment (reference + music loop too, via the drift re-anchor) for `grace_seconds` (5 s) while evals keep accruing to it. Passing early or timing out resumes at the boundary; each segment gets at most one grace; the last segment's grace runs before COMPLETE. `PlayScreen` shows a "LAST CHANCE!" popup on entry and a "COMPLETE THE MOVE — Ns" chip while gracing.

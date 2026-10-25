@@ -130,11 +130,10 @@ def _bg(pygame, ctx, surf, t: float) -> None:
 
 
 def _title(pygame, ctx, surf, t: float, y: int = 90) -> None:
-    bob = int(math.sin(t * 1.8) * 6)
     img = theme.glow_text(pygame, ctx.fonts["title"], "MISSION I'M-DANCABLE", theme.PINK)
-    surf.blit(img, img.get_rect(center=(W // 2, y + bob)))
+    surf.blit(img, img.get_rect(center=(W // 2, y)))
     tag = ctx.fonts["sm"].render("your mission, should you choose to accept it.", True, theme.DIM)
-    surf.blit(tag, tag.get_rect(center=(W // 2, y + 52 + bob)))
+    surf.blit(tag, tag.get_rect(center=(W // 2, y + 52)))
 
 
 def _dim_strip(pygame, surf, rect) -> None:
