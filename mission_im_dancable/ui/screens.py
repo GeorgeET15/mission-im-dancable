@@ -478,10 +478,6 @@ class SelectScreen(Screen):
             close_camera(ctx)  # landing here ends any gameplay session
             self.tgl_mirror.value = ctx.mirror
             self.btn_start.label = "START LEARNING" if ctx.mode == "learn" else "START DANCING"
-            if ctx.video_path and not self.field.text:
-                self.field.text = str(ctx.video_path)
-            elif not self.field.text and ctx.settings.get("last_video"):
-                self.field.text = ctx.settings["last_video"]
             self._scores = load_scores()
             vids = _detect_videos(Path.cwd())[:MAX_DETECTED]
             self.cards = [self._make_card(v, i) for i, v in enumerate(vids)]

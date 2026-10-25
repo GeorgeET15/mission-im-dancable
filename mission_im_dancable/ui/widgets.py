@@ -122,10 +122,36 @@ class TextField:
         if key == 8:  # backspace
             self.text = self.text[:-1]
             return True
+        if key == 118 and self._ctrl_held():  # ctrl+v paste
+            self.text += _paste_text()
+            return True
         if unicode and unicode.isprintable() and key not in (13, 27, 9):
             self.text += unicode
             return True
         return False
+
+    @staticmethod
+    def _ctrl_held() -> bool:
+        try:
+            import pygame
+            return bool(pygame.key.get_mods() & (pygame.KMOD_CTRL | pygame.KMOD_META))
+        except Exception:
+            return False
+
+
+def _paste_text() -> str:
+    """Read the system clipboard via pygame.scrap; '' when unavailable."""
+    try:
+        import pygame
+        pygame.scrap.init()
+        if hasattr(pygame.scrap, "get_text"):
+            data = pygame.scrap.get_text()
+        else:
+            raw = pygame.scrap.get(pygame.SCRAP_TEXT)
+            data = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else (raw or "")
+        return (data or "").replace("\x00", "").strip()
+    except Exception:
+        return ""
 
     def draw(self, pygame, surf, font, t: float) -> None:
         pygame.draw.rect(surf, (16, 10, 30), self.rect, border_radius=8)
