@@ -719,21 +719,36 @@ class SelectScreen(Screen):
 class BrowseScreen(Screen):
     """In-game file browser: pick a dance video from anywhere on disk.
 
-    Single-click a row (or arrows + ENTER): directories navigate, video
-    files set ctx.browse_result and return to the select screen.
+    Left pane is the directory list (dirs + videos); the right pane shows a
+    preview frame grabbed from the highlighted video plus its duration,
+    resolution, and readiness badges (existing segment file / cached poses)
+    so you can tell a usable dance clip from a random file before picking.
     """
 
-    ROWS = 15
+    ROWS = 14
     ROW_H = 30
+    LIST_X, LIST_Y, LIST_W = 60, 200, 620
+    PANE = pygame.Rect(700, 190, 520, 430)
+    THUMB = pygame.Rect(716, 206, 488, 275)
 
     def enter(self) -> None:
         self.cwd: Path | None = None  # resolved on first update (needs ctx)
+        self.home_cwd: Path | None = None  # REPO button returns here
         self.entries: list[tuple[str, str, Path]] = []
         self.sel = 0
         self.offset = 0
         self.err = ""
-        self.btn_up = Button(pygame.Rect(60, 645, 130, 48), "UP", "up")
-        self.btn_cancel = Button(pygame.Rect(200, 645, 170, 48), "CANCEL", "cancel")
+        self._meta: dict[Path, dict] = {}    # video info probe cache
+        self._thumbs: dict[Path, object] = {}  # thumbnail surface cache
+        self._thumb_sel = -1                  # sel the pending thumb belongs to
+        self._thumb_wait = 0.0                # debounce so scrolling stays fast
+        self.btn_up = Button(pygame.Rect(60, 645, 90, 48), "UP", "up")
+        self.btn_home = Button(pygame.Rect(160, 645, 110, 48), "HOME", "home")
+        self.btn_repo = Button(pygame.Rect(280, 645, 110, 48), "REPO", "repo")
+        self.btn_cancel = Button(pygame.Rect(400, 645, 140, 48), "CANCEL", "cancel")
+        self._buttons = [self.btn_up, self.btn_home, self.btn_repo, self.btn_cancel]
+
+    # -- data ------------------------------------------------------------------
 
     def _refresh(self) -> None:
         self.entries = []
@@ -750,7 +765,78 @@ class BrowseScreen(Screen):
         self.entries += [("dir", p.name + "/", p) for p in dirs]
         self.entries += [("vid", p.name, p) for p in vids]
         self.sel = min(self.sel, max(len(self.entries) - 1, 0))
+        self._thumb_sel = -1
+        self._thumb_wait = 0.15
         self._clamp_scroll()
+
+    def _probe(self, path: Path) -> dict:
+        """Cached cv2 probe of a video's duration/resolution/size.
+
+        Never raises — a file that won't open reports only its size so the
+        row still tells the player something honest.
+        """
+        if path in self._meta:
+            return self._meta[path]
+        info: dict = {"dur": 0.0, "w": 0, "h": 0, "fps": 0.0, "size": 0}
+        try:
+            info["size"] = path.stat().st_size
+        except OSError:
+            pass
+        try:
+            cap = cv2.VideoCapture(str(path))
+            try:
+                if cap.isOpened():
+                    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+                    frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+                    info.update(
+                        w=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                        h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                        fps=fps,
+                        dur=frames / fps if fps > 0 else 0.0,
+                    )
+            finally:
+                cap.release()
+        except Exception:
+            pass
+        self._meta[path] = info
+        return info
+
+    def _thumb_for(self, path: Path):
+        """Cached preview frame grabbed ~15% into the video (skips black
+        intros); falls back to the first frame, then None."""
+        if path in self._thumbs:
+            return self._thumbs[path]
+        surf = None
+        try:
+            cap = cv2.VideoCapture(str(path))
+            try:
+                if cap.isOpened():
+                    n = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, max(int(n * 0.15), 0))
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ok, frame = cap.read()
+                    if ok and frame is not None:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        surf = _frame_surf(pygame, frame, self.THUMB.w, self.THUMB.h)
+            finally:
+                cap.release()
+        except Exception:
+            surf = None
+        self._thumbs[path] = surf
+        return surf
+
+    @staticmethod
+    def _fmt_dur(sec: float) -> str:
+        if sec <= 0:
+            return "?"
+        m, s = divmod(int(sec), 60)
+        return f"{m}:{s:02d}"
+
+    @staticmethod
+    def _fmt_size(n: int) -> str:
+        return f"{n / 1e6:.1f}MB" if n >= 1e6 else f"{max(n // 1024, 1)}KB"
 
     def _clamp_scroll(self) -> None:
         if self.sel < self.offset:
@@ -778,52 +864,134 @@ class BrowseScreen(Screen):
                 ctx.manager.pop()
             elif ev.key in (pygame.K_DOWN, pygame.K_s):
                 self.sel = min(self.sel + 1, max(len(self.entries) - 1, 0))
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
             elif ev.key in (pygame.K_UP, pygame.K_w):
                 self.sel = max(self.sel - 1, 0)
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
             elif ev.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_RIGHT):
                 self._activate_row(ctx, self.sel)
             elif ev.key in (pygame.K_LEFT, pygame.K_a):
-                parent = self.cwd.parent
-                if parent != self.cwd:
-                    self.cwd = parent
-                    self.sel = 0
-                    self._refresh()
+                self._go_parent()
             elif ev.key == pygame.K_PAGEDOWN:
                 self.sel = min(self.sel + self.ROWS, max(len(self.entries) - 1, 0))
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
             elif ev.key == pygame.K_PAGEUP:
                 self.sel = max(self.sel - self.ROWS, 0)
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
+        elif ev.type == pygame.MOUSEMOTION:
+            for b in self._buttons:
+                b.hovered = b.contains(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN:
             if ev.button == 4:  # wheel up
                 self.sel = max(self.sel - 1, 0)
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
             elif ev.button == 5:  # wheel down
                 self.sel = min(self.sel + 1, max(len(self.entries) - 1, 0))
+                self._thumb_wait = 0.2
                 self._clamp_scroll()
             elif ev.button == 1:
                 if self.btn_up.contains(ev.pos):
-                    parent = self.cwd.parent
-                    if parent != self.cwd:
-                        self.cwd = parent
-                        self.sel = 0
-                        self._refresh()
+                    self._go_parent()
+                elif self.btn_home.contains(ev.pos):
+                    self._go(Path.home())
+                elif self.btn_repo.contains(ev.pos) and self.home_cwd:
+                    self._go(self.home_cwd)
                 elif self.btn_cancel.contains(ev.pos):
                     ctx.manager.pop()
                 else:
-                    idx = (ev.pos[1] - 200) // self.ROW_H + self.offset
-                    if 200 <= ev.pos[1] < 200 + self.ROWS * self.ROW_H:
-                        self._activate_row(ctx, idx)
+                    lx = self.LIST_X - 10
+                    if lx <= ev.pos[0] < self.LIST_X + self.LIST_W and \
+                            self.LIST_Y <= ev.pos[1] < self.LIST_Y + self.ROWS * self.ROW_H:
+                        idx = (ev.pos[1] - self.LIST_Y) // self.ROW_H + self.offset
+                        if idx == self.sel:
+                            self._activate_row(ctx, idx)
+                        elif 0 <= idx < len(self.entries):
+                            self.sel = idx  # first click selects, second opens
+                            self._thumb_wait = 0.2
+
+    def _go(self, path: Path) -> None:
+        if path.is_dir():
+            self.cwd = path
+            self.sel = 0
+            self.err = ""
+            self._refresh()
+
+    def _go_parent(self) -> None:
+        parent = self.cwd.parent
+        if parent != self.cwd:
+            self._go(parent)
 
     def update(self, ctx, dt) -> None:
         if self.cwd is None:
             start = ctx.video_path.parent if ctx.video_path else Path.cwd()
             self.cwd = start if start.is_dir() else Path.cwd()
+            self.home_cwd = self.cwd
             self._refresh()
-        self.btn_up.update(dt)
-        self.btn_cancel.update(dt)
+        # debounced thumbnail load for the highlighted video — keeps
+        # arrow-key scrolling responsive
+        if self._thumb_wait > 0:
+            self._thumb_wait -= dt
+            if self._thumb_wait <= 0:
+                self._thumb_sel = self.sel
+                if 0 <= self.sel < len(self.entries):
+                    kind, _, path = self.entries[self.sel]
+                    if kind == "vid":
+                        self._thumb_for(path)
+        for b in self._buttons:
+            b.update(dt)
+
+    def _draw_pane(self, ctx, surf, f_sm) -> None:
+        """Right-hand preview pane: thumbnail + metadata + readiness badges."""
+        pygame.draw.rect(surf, theme.PANEL, self.PANE, border_radius=12)
+        pygame.draw.rect(surf, theme.PANEL_EDGE, self.PANE, 2, border_radius=12)
+        sel = self.entries[self.sel] if self.entries else None
+        _panel_label(pygame, ctx, surf, "PREVIEW", self.PANE.x + 14, self.PANE.y - 8)
+        if sel is None or sel[0] != "vid":
+            txt = f_sm.render(
+                "select a video file" if sel is None else "open the folder to see inside",
+                True, theme.DIM)
+            surf.blit(txt, txt.get_rect(center=self.THUMB.center))
+            return
+        _, name, path = sel
+        thumb = self._thumbs.get(path)  # never load in draw — update() does it
+        pygame.draw.rect(surf, theme.PANEL, self.THUMB, border_radius=8)
+        if thumb is not None:
+            surf.blit(thumb, thumb.get_rect(center=self.THUMB.center))
+        elif path in self._thumbs:
+            none_img = f_sm.render("(no frame)", True, theme.DIM)
+            surf.blit(none_img, none_img.get_rect(center=self.THUMB.center))
+        else:
+            loading = f_sm.render("loading…", True, theme.DIM)
+            surf.blit(loading, loading.get_rect(center=self.THUMB.center))
+        pygame.draw.rect(surf, theme.PANEL_EDGE, self.THUMB, 1, border_radius=8)
+        info = self._probe(path)
+        y = self.THUMB.bottom + 14
+        lines = [
+            (name[:46], theme.TEXT),
+            (f"{self._fmt_dur(info['dur'])} · {info['w']}×{info['h']} @ {info['fps']:.0f}fps · {self._fmt_size(info['size'])}",
+             theme.DIM),
+        ]
+        # readiness badges — things that make analysis fast or already done
+        badges = []
+        if path.with_suffix(".moves.json").is_file():
+            badges.append(("SEGMENTS ✓", theme.GOLD))
+        try:
+            from ..reference import cache_path_for
+            if cache_path_for(path, ctx.cfg.cache_dir).is_file():
+                badges.append(("POSES CACHED ✓", theme.CYAN))
+        except Exception:
+            pass
+        for text, color in lines:
+            surf.blit(f_sm.render(text, True, color), (self.THUMB.x, y))
+            y += 24
+        for label, color in badges:
+            surf.blit(f_sm.render(label, True, color), (self.THUMB.x, y))
+            y += 22
 
     def draw(self, ctx, surf) -> None:
         _bg(pygame, ctx, surf, ctx.t)
@@ -833,14 +1001,14 @@ class BrowseScreen(Screen):
         cwd_img = f_sm.render(str(self.cwd), True, theme.GOLD)
         surf.blit(cwd_img, (60, 170))
         if self.err:
-            surf.blit(f_sm.render(self.err[:80], True, theme.MISS), (60, 545))
+            surf.blit(f_sm.render(self.err[:80], True, theme.MISS), (60, 620))
         if not self.entries:
             surf.blit(f_sm.render("no videos or folders here", True, theme.DIM), (60, 210))
-        y = 200
+        y = self.LIST_Y
         for i in range(self.offset, min(self.offset + self.ROWS, len(self.entries))):
-            kind, name, _ = self.entries[i]
+            kind, name, path = self.entries[i]
             selected = i == self.sel
-            row = pygame.Rect(60, y, W - 120, self.ROW_H - 4)
+            row = pygame.Rect(self.LIST_X - 10, y, self.LIST_W + 10, self.ROW_H - 4)
             if selected:
                 pygame.draw.rect(surf, (*theme.PANEL_EDGE,), row, border_radius=6)
             elif kind == "dir":
@@ -848,20 +1016,29 @@ class BrowseScreen(Screen):
             color = theme.CYAN if kind == "dir" else theme.TEXT
             txt = f_sm.render(("▸ " if kind == "dir" else "♪ ") + name, True, color)
             surf.blit(txt, (row.x + 10, row.y + (row.h - txt.get_height()) // 2))
+            if kind == "vid":  # size + duration, right-aligned
+                info = self._probe(path)
+                meta = f"{self._fmt_dur(info['dur'])} · {self._fmt_size(info['size'])}"
+                mi = f_sm.render(meta, True, theme.DIM)
+                surf.blit(mi, mi.get_rect(right=row.right - 10,
+                                          centery=row.y + row.h // 2))
             y += self.ROW_H
         if len(self.entries) > self.ROWS:
-            track = pygame.Rect(W - 46, 200, 8, self.ROWS * self.ROW_H)
+            track = pygame.Rect(self.LIST_X + self.LIST_W + 14, self.LIST_Y, 8,
+                                self.ROWS * self.ROW_H)
             pygame.draw.rect(surf, theme.PANEL, track, border_radius=4)
             frac = self.offset / max(len(self.entries) - self.ROWS, 1)
             th = max(int(track.h * self.ROWS / len(self.entries)), 24)
             pygame.draw.rect(surf, theme.PANEL_EDGE,
                              (track.x, track.y + int((track.h - th) * frac), 8, th),
                              border_radius=4)
+        self._draw_pane(ctx, surf, f_sm)
         _dim_strip(pygame, surf, (W // 2 - 320, H - 44, 640, 34))
-        hint = f_sm.render("↑/↓ select · ENTER open · click a row · Q back", True, theme.DIM)
+        hint = f_sm.render("↑/↓ select · ENTER open · click selects, click again opens · Q back",
+                           True, theme.DIM)
         surf.blit(hint, hint.get_rect(center=(W // 2, H - 26)))
-        self.btn_up.draw(pygame, surf, f_med, ctx.t)
-        self.btn_cancel.draw(pygame, surf, f_med, ctx.t)
+        for b in self._buttons:
+            b.draw(pygame, surf, f_med, ctx.t)
 
 
 # --- READY (camera check + countdown) ----------------------------------------

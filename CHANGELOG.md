@@ -4,6 +4,14 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T07:40:00+05:30 — File browser redesign: preview pane + metadata
+
+- Changed: `BrowseScreen` rewritten as two panes. Left: directory list with per-video duration + size on each row. Right: PREVIEW pane showing a thumbnail grabbed ~15% into the highlighted video (falls back to first frame, then "(no frame)"), duration/resolution/fps/size, and readiness badges — `SEGMENTS ✓` when `<stem>.moves.json` exists, `POSES CACHED ✓` when a matching pose cache file exists (fast ANALYZE). Video info and thumbnails are cached per path; thumbnail load is debounced (~0.2 s after the selection settles) so arrow-key scrolling stays responsive and `draw` never blocks on cv2.
+- Changed: click behaviour is now select-then-open (first click highlights + previews, second opens); keyboard unchanged. Quick-jump buttons: UP / HOME / REPO (the directory the browser opened in) / CANCEL. Left arrow still goes to the parent dir.
+- Why: the old bare name list gave no way to tell a usable dance clip from a random file — no preview, no duration, no indication which videos were already analyzed.
+- Validation: 215/215 tests (3 new: probe never-raises + caching, click-selects-then-opens, debounced thumbnail cache); headless render of the repo dir with `dance_1.mp4` verified — real frame, correct metadata, both badges shown.
+- Limitations: probes run synchronously (~5 ms/file on first paint of a directory); no multi-select or search.
+
 ## 2026-10-25T07:05:00+05:30 — In-game segment editor + auto-suggestions
 
 - Changed: `editor.py` — `SegmentDraft` working copy of the move list (split at playhead, merge with next, ±0.1 s boundary nudge, reorder, rename, `from_draft` flag) and `suggest_boundaries`: cuts every 8th beat when the BeatGrid is usable, else falls back to valleys in cached pose-motion energy. `draft_moves` guarantees non-overlapping, ≥0.2 s segments.

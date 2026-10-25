@@ -388,6 +388,56 @@ def test_browse_cancel_pops():
     assert ctx.manager.popped == 1
 
 
+def test_browse_probe_never_raises_and_caches(tmp_path):
+    from mission_im_dancable.ui.screens import BrowseScreen
+
+    bad = tmp_path / "fake.mp4"
+    bad.write_bytes(b"not a video")
+    scr = BrowseScreen()
+    scr.enter()
+    info = scr._probe(bad)
+    assert info["size"] == len(b"not a video") and info["dur"] == 0.0
+    assert scr._probe(bad) is info  # cached — one probe per file
+
+
+def test_browse_click_selects_then_opens(tmp_path):
+    from mission_im_dancable.ui.screens import BrowseScreen
+
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    ctx = _ctx()
+    ctx.browse_result = None
+    scr = BrowseScreen()
+    scr.enter()
+    scr.cwd = tmp_path
+    scr._refresh()
+    vi = [n for _, n, _ in scr.entries].index("a.mp4")
+    scr.sel = 0
+    y = scr.LIST_Y + vi * scr.ROW_H + 4
+    click = pygame.event.Event(pygame.MOUSEBUTTONDOWN,
+                               pos=(scr.LIST_X + 5, y), button=1)
+    scr.handle_event(ctx, click)
+    assert scr.sel == vi and ctx.browse_result is None  # first click selects
+    scr.handle_event(ctx, click)
+    assert ctx.browse_result == tmp_path / "a.mp4"      # second click opens
+
+
+def test_browse_thumb_cache_debounced(tmp_path):
+    from mission_im_dancable.ui.screens import BrowseScreen
+
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    ctx = _ctx()
+    scr = BrowseScreen()
+    scr.enter()
+    scr.cwd = tmp_path
+    scr._refresh()
+    vi = [n for _, n, _ in scr.entries].index("a.mp4")
+    scr.sel = vi
+    scr._thumb_wait = 0.05
+    scr.update(ctx, 0.1)   # debounce fires → probe attempted (fails gracefully)
+    assert scr._thumb_sel == vi
+    assert tmp_path / "a.mp4" in scr._thumbs  # cached even when unreadable
+
+
 # -- soundtrack wiring ---------------------------------------------------------
 
 
