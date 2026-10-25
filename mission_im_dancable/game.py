@@ -361,10 +361,34 @@ class PlaySession:
         self._last_frame_id: int | None = None
         self._last_interval = -1
         self._eval_elapsed = 0.0
+        self._index = 0           # segment the run is committed to
+        self._graced: set[int] = set()
+        self._grace_left = 0.0
 
     @property
     def move_index(self) -> int:
         return move_index_at(self.moves, self.time)
+
+    @property
+    def grace_remaining(self) -> float:
+        return max(0.0, self._grace_left)
+
+    def _wants_grace(self, i: int) -> bool:
+        """A finished segment that had evals but didn't pass earns one
+        last-chance window (never twice for the same segment)."""
+        return (
+            self.config.grace_seconds > 0
+            and i not in self._graced
+            and self._accs[i].evaluations > 0
+            and not _passes(self._accs[i], self.config)
+        )
+
+    def _enter_grace(self, i: int) -> None:
+        self._graced.add(i)
+        self._index = i
+        self._grace_left = self.config.grace_seconds
+        self.time = self.moves[i].start  # loop the move's reference
+        self.phase = GamePhase.GRACE
 
     @property
     def move(self) -> Move:
@@ -410,19 +434,42 @@ class PlaySession:
         if accuracy is not None:
             self.current_accuracy = accuracy
 
-        if self.phase != GamePhase.ACTIVE or self.paused:
+        if self.phase not in (GamePhase.ACTIVE, GamePhase.GRACE) or self.paused:
             self._last_now = None
             return None
 
         dt = 0.0 if self._last_now is None else now - self._last_now
         self._last_now = now
         self._eval_elapsed += dt
-        self.time = min(self.time + dt, self.end_time)
-        if self.time >= self.end_time:
-            # the run ends exactly at the last segment's end — immediately,
-            # not at the next eval boundary
-            self.phase = GamePhase.COMPLETE
-            self.paused = False
+
+        if self.phase == GamePhase.GRACE:
+            # last-chance window: the failing segment loops while the player
+            # finishes it, then the run resumes at the boundary
+            self._grace_left -= dt
+            seg = self.moves[self._index]
+            self.time += dt
+            if self.time >= seg.end:
+                self.time = seg.start + (self.time - seg.end)
+            if self._grace_left <= 0 or _passes(self._accs[self._index], self.config):
+                self.time = seg.end
+                self.phase = GamePhase.ACTIVE
+                if self.time >= self.end_time:
+                    self.phase = GamePhase.COMPLETE
+        else:
+            self.time = min(self.time + dt, self.end_time)
+            if self.time >= self.end_time:
+                if self._wants_grace(self._index):
+                    self._enter_grace(self._index)  # last move still earns a retry
+                else:
+                    self.phase = GamePhase.COMPLETE
+                    self.paused = False
+            else:
+                idx = move_index_at(self.moves, self.time)
+                if idx > self._index:
+                    if self._wants_grace(self._index):
+                        self._enter_grace(self._index)
+                    else:
+                        self._index = idx
 
         if frame_id == self._last_frame_id:
             return None  # same camera frame re-processed — not a new event

@@ -216,6 +216,63 @@ def test_learn_edit_mode_flow(tmp_path, monkeypatch):
     assert not scr.editing
 
 
+def test_start_auto_segments_without_sidecar(tmp_path, monkeypatch):
+    """A video with no .moves.json gets drafted steps at _start, not one blob."""
+    import os
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from types import SimpleNamespace
+    from mission_im_dancable.config import AppConfig
+    from mission_im_dancable.ui.screens import SelectScreen
+
+    pushed = []
+    ctx = SimpleNamespace(
+        cfg=AppConfig(window_s=0.15, confidence=0.3),
+        window_s=lambda: 0.15, mode="learn",
+        video_path=tmp_path / "v.mp4", moves_path=None,
+        choreo=_choreo(), beats=BeatGrid(np.arange(0.0, 10.0, 0.5)),
+        mirror=False, settings={}, manager=SimpleNamespace(push=pushed.append),
+        choreo_done=None,
+    )
+    scr = SelectScreen()
+    scr.enter()
+    scr.choreo = ctx.choreo
+    scr.moves = [Move("full choreography", 0.0, 10.0)]
+    scr._start(ctx)
+    assert len(ctx.moves) > 1                      # auto-draft gave real steps
+    assert ctx.moves is scr.moves
+    assert ctx.dance is not None and pushed        # and Learn got pushed
+
+
+def test_start_keeps_annotated_segments(tmp_path, monkeypatch):
+    """A real sidecar file's segments are never overwritten by a draft."""
+    import os
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from types import SimpleNamespace
+    from mission_im_dancable.config import AppConfig
+    from mission_im_dancable.ui.screens import SelectScreen
+
+    sidecar = tmp_path / "v.moves.json"
+    sidecar.write_text(json.dumps({"moves": [{"name": "real", "start": 0.0, "end": 5.0},
+                                             {"name": "real2", "start": 5.0, "end": 10.0}]}))
+    ctx = SimpleNamespace(
+        cfg=AppConfig(window_s=0.15, confidence=0.3),
+        window_s=lambda: 0.15, mode="learn",
+        video_path=tmp_path / "v.mp4", moves_path=sidecar,
+        choreo=_choreo(), beats=BeatGrid(np.arange(0.0, 10.0, 0.5)),
+        mirror=False, settings={}, manager=SimpleNamespace(push=lambda s: None),
+    )
+    scr = SelectScreen()
+    scr.enter()
+    scr.choreo = ctx.choreo
+    scr.moves = [Move("real", 0.0, 5.0), Move("real2", 5.0, 10.0)]
+    scr._start(ctx)
+    assert ctx.moves == scr.moves                  # annotations untouched
+
+
 def test_save_requires_confirm_when_file_exists(tmp_path, monkeypatch):
     import os
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")

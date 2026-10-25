@@ -297,9 +297,11 @@ class LearnScreen(Screen):
                 music.pause()
                 self._music_on = False
             return
-        if not music.loaded:
+        if music.path != getattr(ctx, "audio_path", None):
+            # video changed (or first load) → load its own track
             if not music.load(getattr(ctx, "audio_path", None)):
                 return
+            self._reanchor = True
         wrapped = s.time < prev_t - 1e-3  # loop jumped back to segment start
         if not self._music_on or wrapped or self._reanchor:
             music.play_at(s.time)
@@ -502,6 +504,9 @@ class LearnScreen(Screen):
         )
         diff = f" · {dance.difficulty}" if dance is not None and dance.difficulty else ""
         surf.blit(f_med.render(f"LEARN — {title}{diff}", True, theme.CYAN), (60, 148))
+        if getattr(ctx, "moves_path", None) is None and len(s.moves) > 1:
+            auto = f_sm.render("auto-segments · E to refine", True, theme.GOLD)
+            surf.blit(auto, (640, 152))
         key_text = (
             "B split · X merge · [ ] nudge · ↑/↓ select · PgUp/Dn reorder · N name · ENTER preview · G suggest · A accept · S save · E done"
             if self.editing else

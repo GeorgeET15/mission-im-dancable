@@ -105,17 +105,31 @@ class Music:
     def loaded(self) -> bool:
         return self._loaded is not None
 
+    @property
+    def path(self) -> Path | None:
+        """Which WAV is currently loaded — screens compare against
+        ctx.audio_path so switching videos re-loads the right track."""
+        return self._loaded
+
     def load(self, wav_path: Path | None) -> bool:
-        """Load a WAV into the music channel. False when unusable."""
-        self._loaded = None
+        """Load a WAV into the music channel.
+
+        Idempotent per path: loading the track that's already loaded is a
+        cheap no-op; a *different* path stops and replaces the old track.
+        """
         if not self.enabled or wav_path is None:
             return False
+        wav_path = Path(wav_path)
+        if self._loaded == wav_path:
+            return True
         try:
+            self._music().stop()
             self._music().load(str(wav_path))
             self._music().set_volume(self._volume)
             self._loaded = wav_path
             return True
         except Exception:
+            self._loaded = None
             return False
 
     def play_at(self, t: float) -> None:

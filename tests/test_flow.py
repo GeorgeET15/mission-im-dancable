@@ -466,13 +466,19 @@ class FakeMusic:
     def __init__(self):
         self.calls = []
         self._pos = None
+        self._path = None
 
     @property
     def loaded(self):
-        return any(c[0] == "load" and c[1] for c in self.calls)
+        return self._path is not None
+
+    @property
+    def path(self):
+        return self._path
 
     def load(self, path):
         self.calls.append(("load", path is not None))
+        self._path = path if path is not None else None
         return path is not None
 
     def play_at(self, t):

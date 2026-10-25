@@ -16,6 +16,7 @@ from ..beats import load_or_detect_beats
 from ..camera import CameraError, open_camera
 from ..config import AppConfig
 from ..dance import build_dance
+from ..editor import draft_moves, suggest_boundaries
 from ..game import GamePhase, GameSession, PlaySession, grade_for, judge, Judgement
 from ..geometry import SKELETON_EDGES
 from ..moves import default_moves, load_dance_file
@@ -554,6 +555,15 @@ class SelectScreen(Screen):
     def _start(self, ctx) -> None:
         if self.choreo is None or self.moves is None:
             return
+        # No hand-written annotation file → draft real steps from the
+        # video's own beat grid / pose motion so Learn navigation and
+        # Play move results get segments instead of one giant blob.
+        # These stay in-memory suggestions until saved in the editor.
+        if ctx.moves_path is None and len(self.moves) <= 1:
+            bounds = suggest_boundaries(ctx.choreo, ctx.beats, self.choreo.duration)
+            if bounds:
+                self.moves = draft_moves(self.choreo.duration, bounds)
+                self.dance = build_dance(ctx.video_path, self.choreo, self.moves, {})
         ctx.choreo, ctx.moves, ctx.dance = self.choreo, self.moves, self.dance
         ctx.mirror = self.tgl_mirror.value
         ctx.settings["last_video"] = str(ctx.video_path)
@@ -1275,6 +1285,7 @@ class PlayScreen(Screen):
         self._music_started = False  # soundtrack anchored at run start
         self._music_paused = False
         self._music_stopped = False
+        self._last_phase = None
 
     def _ensure(self, ctx) -> None:
         """One-time init needing ctx (camera + session); safe to call often."""
@@ -1314,9 +1325,8 @@ class PlayScreen(Screen):
                 music.stop()
                 self._music_stopped = True
             return
-        if not music.loaded:
-            if not music.load(getattr(ctx, "audio_path", None)):
-                return  # no audio track for this video — silent run
+        if not music.load(getattr(ctx, "audio_path", None)):
+            return  # no audio track for this video — silent run
         if not self._music_started:
             music.play_at(s.start_time)
             self._music_started = True
@@ -1396,6 +1406,9 @@ class PlayScreen(Screen):
         self.frame_id += 1
         accuracy, reliable, hint, _ = self._eval_feed(ctx)
         ev = self.session.update(time.perf_counter(), accuracy, reliable, self.frame_id)
+        if self.session.phase == GamePhase.GRACE and self._last_phase != GamePhase.GRACE:
+            self.popups.append(["LAST CHANCE!", theme.GOLD, ctx.t])
+        self._last_phase = self.session.phase
         if not self.session.paused:
             self._on_eval(ctx, ev)
         self.hint = self.corrections.update(hint)
@@ -1453,6 +1466,11 @@ class PlayScreen(Screen):
         if self.frame is not None and self.live is None and self.no_pose_t > 0.6:
             _chip(pygame, ctx, surf, "POSE LOST — STEP INTO FRAME",
                   (cam_rect[0] + cam_rect[2] // 2, cam_rect[1] + 28), theme.GOLD)
+        # grace window — the failing segment loops; finish it before it ends
+        if s.phase == GamePhase.GRACE:
+            _chip(pygame, ctx, surf,
+                  f"COMPLETE THE MOVE — {s.grace_remaining:.0f}s",
+                  (ref_rect[0] + ref_rect[2] // 2, ref_rect[1] + 28), theme.GOLD)
         # bottom HUD
         acc = s.current_accuracy or 0.0
         surf.blit(f_sm.render(f"ACCURACY {acc * 100:3.0f}%", True, theme.TEXT), (30, 600))
@@ -1535,7 +1553,8 @@ class WatchScreen(Screen):
         if music is None:
             return
         self.music = music
-        if not music.loaded:
+        if music.path != getattr(ctx, "audio_path", None):
+            # fresh load (new video or first play) → start at the clock
             if not music.load(getattr(ctx, "audio_path", None)):
                 return
             music.play_at(self.clock.time)

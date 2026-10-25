@@ -4,6 +4,14 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T09:20:00+05:30 — Play grace windows, auto-segmentation, stale-audio fix
+
+- Changed: `PlaySession` regains the grace mechanic inside the continuous run — when a segment ends without passing, the run enters `GamePhase.GRACE`: the playhead loops inside that segment (reference + music loop too, via the drift re-anchor) for `grace_seconds` (5 s) while evals keep accruing to it. Passing early or timing out resumes at the boundary; each segment gets at most one grace; the last segment's grace runs before COMPLETE. `PlayScreen` shows a "LAST CHANCE!" popup on entry and a "COMPLETE THE MOVE — Ns" chip while gracing.
+- Changed: `SelectScreen._start` auto-drafts segments for any video with no `.moves.json` (`suggest_boundaries` from the BeatGrid / pose-motion + `draft_moves`) so Learn's steps/N-P navigation and Play's per-move results get real steps instead of one "full choreography" blob. Drafts stay in-memory until saved in the editor; Learn header shows "auto-segments · E to refine". Real sidecar annotations are never overwritten.
+- Fixed: stale soundtrack — `Music.load` was gated behind `music.loaded`, which stayed true for the previous video's WAV, so a newly analyzed video kept playing `dance_1`'s audio. `Music.load` is now idempotent-per-path and exposes `.path`; all three audio-sync sites (Play, Learn, Watch) load when `music.path != ctx.audio_path`.
+- Validation: 230/230 tests (7 new: grace loop/timeout/early-recovery/once-only/no-grace-on-pass, auto-draft at start, annotations preserved).
+- Limitations: grace pauses the *run* by looping the segment — the song effectively rewinds with it, matching the original move-by-move behavior.
+
 ## 2026-10-25T08:35:00+05:30 — UI click sound effects
 
 - Changed: `sfx.py` — synthesized ~70 ms click blip (downward chirp, numpy → int16 stereo) played via `pygame.mixer.Sound` on whatever channel is free; `Sfx` wrapper is a safe no-op without a mixer and scales to the music-volume setting. `Button` gained a class-level `on_press` hook fired inside `press()` — `app.py` binds it to `Sfx.click`, so every button (mouse or keyboard-activated) clicks without widgets knowing about audio. Hook errors are swallowed so sfx can never break input.
