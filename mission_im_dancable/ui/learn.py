@@ -38,8 +38,8 @@ from .screens import (
 )
 from .widgets import Button, TextField, TimelineBar
 
-REF_RECT = (60, 195, 480, 345)
-CAM_RECT = (580, 195, 640, 345)  # camera owns the whole right half
+REF_RECT = (60, 195, 500, 345)
+CAM_RECT = (930, 185, 290, 415)  # tall right column — portrait, like a phone
 STATUS_COLORS = {"learning": theme.VIOLET, "practicing": theme.CYAN, "mastered": theme.GOLD}
 
 
@@ -471,11 +471,17 @@ class LearnScreen(Screen):
             fitted = fit_keypoints(shown, ctx.choreo.width, ctx.choreo.height, *REF_RECT)
             _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.VIOLET)
         if self.frame is not None:
-            surf.blit(_frame_surf(pygame, self.frame, CAM_RECT[2], CAM_RECT[3]), CAM_RECT[:2])
+            # centre-crop the landscape frame to the panel's portrait aspect —
+            # the user sees their whole body without stepping back
+            fh, fw = self.frame.shape[:2]
+            crop_w = max(1, min(fw, int(fh * CAM_RECT[2] / CAM_RECT[3])))
+            x0 = (fw - crop_w) // 2
+            shown = self.frame[:, x0 : x0 + crop_w]
+            surf.blit(_frame_surf(pygame, shown, CAM_RECT[2], CAM_RECT[3]), CAM_RECT[:2])
             if self.live is not None:
-                fitted = fit_keypoints(
-                    self.live.keypoints, self.frame.shape[1], self.frame.shape[0], *CAM_RECT
-                )
+                kp = self.live.keypoints.copy()
+                kp[:, 0] -= x0
+                fitted = fit_keypoints(kp, crop_w, fh, *CAM_RECT)
                 _neon_skeleton(pygame, surf, fitted, ctx.cfg.confidence, theme.CYAN)
             if self.live is None and self.no_pose_t > 0.6:
                 _chip(pygame, ctx, surf, "NO POSE — STEP INTO FRAME",
