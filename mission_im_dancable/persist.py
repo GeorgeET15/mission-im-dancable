@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     "fullscreen": False,
     "window_s": 0.15,
     "volume": 80,
+    "player_name": "PLAYER",
 }
 
 
@@ -72,12 +73,14 @@ def add_score(
     best_combo: int,
     grade: str,
     mode: str = "performance",
+    name: str = "",
 ) -> list[dict]:
     """Record a run and return the updated top-score list (best first)."""
     scores = load_scores()
     scores.append(
         {
             "video": video,
+            "name": name.strip()[:16] or "PLAYER",
             "score": int(score),
             "mean_accuracy": round(float(mean_accuracy), 3),
             "best_combo": int(best_combo),

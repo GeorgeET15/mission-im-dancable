@@ -1628,10 +1628,13 @@ class ResultsScreen(Screen):
     def enter(self) -> None:
         self.card = None
         self._saved = False
+        self._checked = False
         self.new_best = False
         self.buttons = []
         self.group = None
         self.born = time.perf_counter()
+        self.name_field = TextField(pygame.Rect(905, 248, 315, 38), placeholder="player name")
+        self.name_field.focused = False
 
     def _sync(self, ctx) -> None:
         session = getattr(ctx, "last_session", None)
@@ -1639,17 +1642,29 @@ class ResultsScreen(Screen):
             self.card = session.scorecard()
         if self.card is None:
             return
-        if not self._saved:
-            self._saved = True
+        if not self._checked:
+            self._checked = True
             video = ctx.video_path.name if ctx.video_path else "?"
             prev = _best_score_for(video, load_scores())
             self.new_best = prev is None or self.card["total_score"] > prev["score"]
-            add_score(
-                video,
-                self.card["total_score"], self.card["mean_accuracy"],
-                self.card["best_combo"], grade_for(self.card["mean_accuracy"]),
-            )
-            ctx.particles.burst(W // 2, 200, theme.GOLD, n=60)
+            self.name_field.text = ctx.settings.get("player_name", "PLAYER")
+
+    def _commit(self, ctx) -> None:
+        """Save the run under the entered name (once)."""
+        if self._saved or self.card is None:
+            return
+        self._saved = True
+        name = self.name_field.text.strip()[:16] or "PLAYER"
+        ctx.settings["player_name"] = name
+        save_settings(ctx.settings)
+        video = ctx.video_path.name if ctx.video_path else "?"
+        add_score(
+            video,
+            self.card["total_score"], self.card["mean_accuracy"],
+            self.card["best_combo"], grade_for(self.card["mean_accuracy"]),
+            name=name,
+        )
+        ctx.particles.burst(W // 2, 200, theme.GOLD, n=60)
         if not self.buttons:
             self.buttons = [
                 Button(pygame.Rect(W // 2 - 340, 610, 210, 52), "RETRY", "retry", True),
@@ -1659,6 +1674,7 @@ class ResultsScreen(Screen):
             self.group = FocusGroup(self.buttons)
 
     def _activate(self, ctx, action: str) -> None:
+        self._commit(ctx)  # score saves before leaving
         if action == "retry":
             ctx.manager.swap(PlayScreen())
         elif action == "select":
@@ -1668,6 +1684,22 @@ class ResultsScreen(Screen):
 
     def handle_event(self, ctx, ev) -> None:
         self._sync(ctx)
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            if self.name_field.contains(ev.pos):
+                self.name_field.focused = True
+                return
+            if self.name_field.focused:
+                self.name_field.focused = False
+                self._commit(ctx)
+        elif ev.type == pygame.KEYDOWN and self.name_field.focused:
+            if ev.key == pygame.K_RETURN:
+                self.name_field.focused = False
+                self._commit(ctx)
+            elif ev.key == pygame.K_ESCAPE:
+                self.name_field.focused = False
+            else:
+                self.name_field.handle_key(ev.key, ev.unicode)
+            return
         if not self.buttons:
             return
         if ev.type == pygame.MOUSEMOTION:
@@ -1741,6 +1773,11 @@ class ResultsScreen(Screen):
                 f"… and {len(ctx.last_results) - 6} more moves", True, theme.DIM)
             surf.blit(more, more.get_rect(center=(W // 2, y)))
         ctx.particles.draw(pygame, surf)
+        lbl = ctx.fonts["sm"].render("PLAYER NAME", True, theme.GOLD)
+        surf.blit(lbl, (905, 226))
+        hint = ctx.fonts["sm"].render("ENTER to save score", True, theme.DIM)
+        surf.blit(hint, (905, 292))
+        self.name_field.draw(pygame, surf, ctx.fonts["sm"], ctx.t)
         for b in getattr(self, "buttons", []):
             b.draw(pygame, surf, ctx.fonts["med"], ctx.t)
 
@@ -1894,12 +1931,12 @@ class ScoresScreen(Screen):
             surf.blit(f_sm.render("no runs recorded yet — go dance!", True, theme.DIM), (120, 250))
             self.btn_back.draw(pygame, surf, f_med, ctx.t)
             return
-        header = f_sm.render(f"{'#':>2}  {'SCORE':>6}  GRD   ACC   COMBO  DANCE", True, theme.DIM)
+        header = f_sm.render(f"{'#':>2}  {'SCORE':>6}  GRD   ACC   COMBO  NAME         DANCE", True, theme.DIM)
         surf.blit(header, (120, 240))
         y = 268
         for i, s in enumerate(self.scores):
             line = (f"{i + 1:>2}. {s['score']:>6}   [{s['grade']}]  {s['mean_accuracy'] * 100:3.0f}%"
-                    f"   {s['best_combo']:>4}   {Path(s['video']).name[:30]}")
+                    f"   {s['best_combo']:>4}   {s.get('name', 'PLAYER'):<12} {Path(s['video']).name[:24]}")
             color = theme.GOLD if i == 0 else (theme.TEXT if i < 3 else theme.DIM)
             surf.blit(f_sm.render(line, True, color), (120, y))
             y += 32
