@@ -421,6 +421,27 @@ def test_browse_click_selects_then_opens(tmp_path):
     assert ctx.browse_result == tmp_path / "a.mp4"      # second click opens
 
 
+def test_browse_click_with_float_pos(tmp_path):
+    """pygame delivers float mouse coords — row math must stay int."""
+    from mission_im_dancable.ui.screens import BrowseScreen
+
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    ctx = _ctx()
+    ctx.browse_result = None
+    scr = BrowseScreen()
+    scr.enter()
+    scr.cwd = tmp_path
+    scr._refresh()
+    vi = [n for _, n, _ in scr.entries].index("a.mp4")
+    click = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN,
+        pos=(float(scr.LIST_X + 5), float(scr.LIST_Y + vi * scr.ROW_H + 4)),
+        button=1,
+    )
+    scr.handle_event(ctx, click)   # must not raise TypeError
+    assert scr.sel == vi
+
+
 def test_browse_thumb_cache_debounced(tmp_path):
     from mission_im_dancable.ui.screens import BrowseScreen
 

@@ -907,7 +907,7 @@ class BrowseScreen(Screen):
                     lx = self.LIST_X - 10
                     if lx <= ev.pos[0] < self.LIST_X + self.LIST_W and \
                             self.LIST_Y <= ev.pos[1] < self.LIST_Y + self.ROWS * self.ROW_H:
-                        idx = (ev.pos[1] - self.LIST_Y) // self.ROW_H + self.offset
+                        idx = int((ev.pos[1] - self.LIST_Y) // self.ROW_H) + self.offset
                         if idx == self.sel:
                             self._activate_row(ctx, idx)
                         elif 0 <= idx < len(self.entries):
