@@ -445,7 +445,7 @@ def _download_video(url: str, cache_dir: Path) -> Path:
         info = ydl.extract_info(url, download=True)
         dl = (info.get("requested_downloads") or [{}])[0]
     out = Path(dl.get("filepath") or ydl.prepare_filename(info))
-    if _probe_video(out) is not None:
+    if _can_decode(out):
         return out
     # codec cv2 can't read (e.g. AV1-only video) → transcode once to h264
     import subprocess
@@ -455,10 +455,22 @@ def _download_video(url: str, cache_dir: Path) -> Path:
          "-c:v", "libx264", "-preset", "fast", "-c:a", "copy", str(conv)],
         capture_output=True, timeout=600,
     )
-    if conv.is_file() and _probe_video(conv) is not None:
+    if conv.is_file() and _can_decode(conv):
         return conv
     conv.unlink(missing_ok=True)
     raise RuntimeError("downloaded video uses a codec we can't decode")
+
+
+def _can_decode(path: Path) -> bool:
+    """True when cv2 can actually decode a frame (not just metadata —
+    AV1 files pass the metadata probe but fail on cap.read())."""
+    try:
+        cap = cv2.VideoCapture(str(path))
+        ok, _ = cap.read()
+        cap.release()
+        return ok
+    except Exception:
+        return False
 
 
 class SelectScreen(Screen):
