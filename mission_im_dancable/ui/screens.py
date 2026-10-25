@@ -432,7 +432,9 @@ def _download_video(url: str, cache_dir: Path) -> Path:
     dl_dir = cache_dir / "downloads"
     dl_dir.mkdir(parents=True, exist_ok=True)
     opts = {
-        "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
+        # video+audio ≤720p merged to mp4, else best available — never "format
+        # not available" on videos that only offer separate DASH streams
+        "format": "bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
         "outtmpl": str(dl_dir / "%(id)s.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
@@ -441,7 +443,8 @@ def _download_video(url: str, cache_dir: Path) -> Path:
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return Path(ydl.prepare_filename(info))
+        dl = (info.get("requested_downloads") or [{}])[0]
+        return Path(dl.get("filepath") or ydl.prepare_filename(info))
 
 
 class SelectScreen(Screen):
