@@ -130,7 +130,7 @@ def _bg(pygame, ctx, surf, t: float) -> None:
 
 def _title(pygame, ctx, surf, t: float, y: int = 90) -> None:
     bob = int(math.sin(t * 1.8) * 6)
-    img = theme.glow_text(pygame, ctx.fonts["title"], "MISSION IM-DANCABLE", theme.PINK)
+    img = theme.glow_text(pygame, ctx.fonts["title"], "MISSION I'M-DANCABLE", theme.PINK)
     surf.blit(img, img.get_rect(center=(W // 2, y + bob)))
     tag = ctx.fonts["sm"].render("your mission, should you choose to accept it.", True, theme.DIM)
     surf.blit(tag, tag.get_rect(center=(W // 2, y + 52 + bob)))
@@ -419,8 +419,8 @@ class SelectScreen(Screen):
 
     def enter(self) -> None:
         self.field = TextField(pygame.Rect(60, 190, 760, 44), placeholder="type a video path, or click a dance below")
-        self.btn_analyze = Button(pygame.Rect(840, 188, 190, 48), "ANALYZE", "analyze", True)
-        self.btn_start = Button(pygame.Rect(1050, 188, 190, 48), "START DANCING", "start", True, enabled=False)
+        self.btn_analyze = Button(pygame.Rect(840, 188, 150, 48), "ANALYZE", "analyze", True)
+        self.btn_start = Button(pygame.Rect(1000, 188, 240, 48), "START DANCING", "start", True, enabled=False)
         self.tgl_mirror = Toggle(pygame.Rect(60, 260, 460, 30), "mirror choreography", "mirror", False)
         self.btn_back = Button(pygame.Rect(60, 645, 160, 48), "BACK", "back")
         self.btn_browse = Button(pygame.Rect(230, 645, 160, 48), "BROWSE…", "browse")

@@ -4,6 +4,14 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T08:15:00+05:30 — Title readability + synthesized lobby music
+
+- Changed: Title font switched from bold mono to a clean sans stack (`ubuntusans,dejavusans,liberationsans`) — the mono glyphs plus glow halo were hard to read. Title text is now "MISSION I'M-DANCABLE" (apostrophe kept, wording unchanged per owner). SelectScreen start button widened 190→240 px so "START LEARNING"/"START DANCING" no longer overflow their border.
+- Changed: `lobby.py` — synthesized looping menu music (96 BPM Am–F–C–G pluck arpeggio, ~10 s loop, numpy → int16 stereo, loop-edge fades). `LobbyMusic` plays it on a dedicated mixer **Channel** — separate from `pygame.mixer.music`, which owns the dance soundtrack — so the two never collide. The app loop starts it on menu screens (Home/Select/Browse/Settings/Scores) and stops it on every gameplay screen; volume scales from the music-volume setting; fully no-op when the mixer is unavailable.
+- Why: readability complaint on the title; request for lobby music without adding a bundled/licensed audio asset.
+- Validation: 219/219 tests (3 new: stereo int16 shape/duration, loop-end fade vs peak, disabled no-ops); title rendered and reviewed headless.
+- Limitations: track is a generated synth loop — no user-supplied lobby track support yet; audition of the actual sound not verified by ear in headless runs.
+
 ## 2026-10-25T07:40:00+05:30 — File browser redesign: preview pane + metadata
 
 - Changed: `BrowseScreen` rewritten as two panes. Left: directory list with per-video duration + size on each row. Right: PREVIEW pane showing a thumbnail grabbed ~15% into the highlighted video (falls back to first frame, then "(no frame)"), duration/resolution/fps/size, and readiness badges — `SEGMENTS ✓` when `<stem>.moves.json` exists, `POSES CACHED ✓` when a matching pose cache file exists (fast ANALYZE). Video info and thumbnails are cached per path; thumbnail load is debounced (~0.2 s after the selection settles) so arrow-key scrolling stays responsive and `draw` never blocks on cv2.

@@ -9,14 +9,30 @@ from ..config import AppConfig
 from ..persist import save_settings
 from . import theme
 from .nav import Navigator
-from .screens import AppContext, HomeScreen, W, H, close_camera
+from .screens import (
+    AppContext,
+    BrowseScreen,
+    HomeScreen,
+    ScoresScreen,
+    SelectScreen,
+    SettingsScreen,
+    W,
+    H,
+    close_camera,
+)
+from ..lobby import LobbyMusic
+
+_MENU_SCREENS = (HomeScreen, SelectScreen, BrowseScreen, SettingsScreen, ScoresScreen)
 
 
 def _fonts(pygame):
     def f(size, bold=False):
         return pygame.font.SysFont("ubuntumono,dejavusansmono,liberationmono", size, bold=bold)
 
-    return {"sm": f(18), "med": f(24, bold=True), "big": f(56, bold=True), "title": f(64, bold=True)}
+    def g(size, bold=False):  # title uses a cleaner sans — mono glyphs were illegible
+        return pygame.font.SysFont("ubuntusans,dejavusans,liberationsans,arial", size, bold=bold)
+
+    return {"sm": f(18), "med": f(24, bold=True), "big": f(56, bold=True), "title": g(64, bold=True)}
 
 
 def _apply_fullscreen(pygame, on: bool):
@@ -45,6 +61,8 @@ def run_arcade(cfg: AppConfig) -> int:
     ctx.bg = theme.gradient_surface(pygame, W, H)
     ctx.music = Music(enabled=audio_ok)
     ctx.music.set_volume(float(ctx.settings.get("volume", 80)) / 100.0)
+    ctx.lobby = LobbyMusic(enabled=audio_ok,
+                           volume=float(ctx.settings.get("volume", 80)) / 250.0)
     applied_fullscreen = False
     if ctx.fullscreen:
         window = _apply_fullscreen(pygame, True)
@@ -82,6 +100,11 @@ def run_arcade(cfg: AppConfig) -> int:
             if manager.current is None:
                 running = False  # stack underflow — nothing left to show
                 break
+            # lobby loop lives only on menus — dance screens own the audio
+            if isinstance(manager.current, _MENU_SCREENS):
+                ctx.lobby.ensure()
+            else:
+                ctx.lobby.stop()
             ctx.particles.update(dt)
             manager.draw(ctx, canvas)
             # scale canvas onto the actual window (handles resize gracefully)
@@ -95,6 +118,7 @@ def run_arcade(cfg: AppConfig) -> int:
                 window = _apply_fullscreen(pygame, ctx.fullscreen)
                 applied_fullscreen = ctx.fullscreen
     finally:
+        ctx.lobby.stop()
         close_camera(ctx)
         pygame.quit()
     return 0
