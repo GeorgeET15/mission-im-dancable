@@ -414,11 +414,41 @@ class HomeScreen(Screen):
 # --- DANCE SELECT -----------------------------------------------------------
 
 
+def _looks_like_url(text: str) -> bool:
+    t = text.strip().lower()
+    return t.startswith(("http://", "https://"))
+
+
+def _download_video(url: str, cache_dir: Path) -> Path:
+    """Fetch a remote video (YouTube etc.) via yt-dlp into cache/downloads.
+
+    Downloaded files are plain local videos from then on — the same
+    analyze/segments/audio pipeline applies unchanged.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("pasting links needs yt-dlp — pip install yt-dlp")
+    dl_dir = cache_dir / "downloads"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    opts = {
+        "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
+        "outtmpl": str(dl_dir / "%(id)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "merge_output_format": "mp4",
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        return Path(ydl.prepare_filename(info))
+
+
 class SelectScreen(Screen):
     """Pick a local video, analyze it (background thread), start dancing."""
 
     def enter(self) -> None:
-        self.field = TextField(pygame.Rect(60, 190, 760, 44), placeholder="type a video path, or click a dance below")
+        self.field = TextField(pygame.Rect(60, 190, 760, 44), placeholder="video path or https:// link — or click a dance below")
         self.btn_analyze = Button(pygame.Rect(840, 188, 150, 48), "ANALYZE", "analyze", True)
         self.btn_start = Button(pygame.Rect(1000, 188, 240, 48), "START DANCING", "start", True, enabled=False)
         self.tgl_mirror = Toggle(pygame.Rect(60, 260, 460, 30), "mirror choreography", "mirror", False)
@@ -492,17 +522,20 @@ class SelectScreen(Screen):
     def _analyze(self, ctx) -> None:
         if self._thread is not None and self._thread.is_alive():
             return  # one extraction per selection
-        path = Path(self.field.text.strip()).expanduser()
-        if not path.is_file():
-            self._set_status(f"file not found: {path}", theme.MISS)
+        text = self.field.text.strip()
+        url_mode = _looks_like_url(text)
+        path = Path(text).expanduser() if not url_mode else None
+        if not url_mode and (path is None or not path.is_file()):
+            self._set_status(f"file not found: {text[:60]}", theme.MISS)
             self.btn_start.enabled = False
             return
-        if _probe_video(path) is None:
+        if not url_mode and _probe_video(path) is None:
             self._set_status("cannot decode this video — unsupported or corrupt", theme.MISS)
             self.btn_start.enabled = False
             return
-        ctx.video_path = path
-        ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
+        if not url_mode:
+            ctx.video_path = path
+            ctx.moves_path = self._detect_moves(path) or ctx.cfg.moves_path
         self.choreo = None
         self.moves = None
         self.dance = None
@@ -510,10 +543,20 @@ class SelectScreen(Screen):
         self.btn_start.enabled = False
         self.btn_watch.enabled = False
         self.progress = 0.0
-        self._set_status("analyzing choreography…", theme.CYAN)
+        self._set_status("downloading video…" if url_mode else "analyzing choreography…",
+                         theme.CYAN)
 
         def work() -> None:
             try:
+                vpath = path
+                if url_mode:  # fetch first, then the normal pipeline applies
+                    vpath = _download_video(text, ctx.cfg.cache_dir)
+                    ctx.video_path = vpath
+                    ctx.moves_path = self._detect_moves(vpath) or ctx.cfg.moves_path
+                    if _probe_video(vpath) is None:
+                        raise RuntimeError("downloaded file won't decode")
+                if url_mode:
+                    self._set_status("analyzing choreography…", theme.CYAN)
                 if ctx.tracker is None:
                     self._set_status("loading pose model…", theme.CYAN)
                     import torch
@@ -524,7 +567,7 @@ class SelectScreen(Screen):
                         ctx.cfg.model_path, ctx.device, ctx.cfg.confidence
                     )
                 choreo = load_or_extract(
-                    ctx.tracker, path, ctx.cfg.sample_fps, ctx.cfg.cache_dir,
+                    ctx.tracker, vpath, ctx.cfg.sample_fps, ctx.cfg.cache_dir,
                     ctx.cfg.confidence, model_name=ctx.cfg.model_path.name,
                     on_progress=lambda d, t: setattr(self, "progress", d / max(t, 1)),
                 )
@@ -536,10 +579,10 @@ class SelectScreen(Screen):
             except Exception as exc:  # surface to UI thread
                 self.error = str(exc)
                 return
-            ctx.beats = load_or_detect_beats(path, ctx.cfg.cache_dir)
-            ctx.audio_path = ensure_audio_wav(path, ctx.cfg.cache_dir)
+            ctx.beats = load_or_detect_beats(vpath, ctx.cfg.cache_dir)
+            ctx.audio_path = ensure_audio_wav(vpath, ctx.cfg.cache_dir)
             self.choreo, self.moves = choreo, moves
-            self.dance = build_dance(path, choreo, moves, meta)
+            self.dance = build_dance(vpath, choreo, moves, meta)
 
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()

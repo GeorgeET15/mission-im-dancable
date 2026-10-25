@@ -216,6 +216,29 @@ def test_learn_edit_mode_flow(tmp_path, monkeypatch):
     assert not scr.editing
 
 
+def test_url_detection():
+    from mission_im_dancable.ui.screens import _looks_like_url
+    assert _looks_like_url("https://youtu.be/abc123")
+    assert _looks_like_url(" http://youtube.com/watch?v=x ")
+    assert not _looks_like_url("/home/user/dance.mp4")
+    assert not _looks_like_url("dance.mp4")
+    assert not _looks_like_url("C:\\videos\\x.mp4")
+
+
+def test_download_helper_requires_ytdlp(monkeypatch, tmp_path):
+    """A clear error if yt-dlp is missing rather than a bare ImportError."""
+    import builtins
+    from mission_im_dancable.ui import screens
+    real_import = builtins.__import__
+    def fake_import(name, *a, **k):
+        if name == "yt_dlp":
+            raise ImportError("no yt_dlp")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(RuntimeError, match="yt-dlp"):
+        screens._download_video("https://youtu.be/x", tmp_path)
+
+
 def test_start_auto_segments_without_sidecar(tmp_path, monkeypatch):
     """A video with no .moves.json gets drafted steps at _start, not one blob."""
     import os

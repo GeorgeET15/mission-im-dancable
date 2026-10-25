@@ -4,6 +4,12 @@ Record each meaningful project change during the event, newest first. Update thi
 
 ## Event build log
 
+## 2026-10-25T10:30:00+05:30 — Paste video links + player names on high scores
+
+- Added: the select screen's path field accepts `http(s)://` links — `_download_video` (yt-dlp, new dependency) fetches the video into `cache/downloads/<id>.mp4` inside the analyze worker thread (no UI freeze, "downloading video…" status), then the normal analyze/segments/audio pipeline applies unchanged. Field placeholder mentions links. Missing yt-dlp yields a clear error. Files: `ui/screens.py`, `requirements.txt`.
+- Added: player names on high scores — Results shows a PLAYER NAME field prefilled from settings; ENTER or any navigation commits the run under that name (persisted so it's prefilled next time). Score entries store `"name"` (≤16 chars, default PLAYER) shown as a column in HIGH SCORES. Files: `persist.py`, `ui/screens.py`.
+- Validation: 232/232 tests (URL detector + yt-dlp-missing error). Real YouTube download not exercised in CI (network-dependent).
+
 ## 2026-10-25T09:50:00+05:30 — Learn layout declutter + static title
 
 - Changed: `_title` no longer bobs — heading stays fixed per owner request. Learn screen reworked: camera panel widened to the full right half (640 px vs 560), REFERENCE/YOU labels moved inside their panels as chips (was colliding with the header), "auto-segments" badge moved under the LEARN title, the pose-correction hint is now a chip inside the reference panel instead of a bottom text row overlapping the timeline, camera-status text centers on the panel instead of a hardcoded offset.
