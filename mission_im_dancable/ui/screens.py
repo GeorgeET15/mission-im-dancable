@@ -432,9 +432,9 @@ def _download_video(url: str, cache_dir: Path) -> Path:
     dl_dir = cache_dir / "downloads"
     dl_dir.mkdir(parents=True, exist_ok=True)
     opts = {
-        # video+audio ≤720p merged to mp4, else best available — never "format
-        # not available" on videos that only offer separate DASH streams
-        "format": "bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
+        # prefer h264 (cv2 always decodes it); fall back to anything and
+        # transcode below — never "format not available" on DASH-only videos
+        "format": "bv*[height<=720][vcodec^=avc]+ba/b[height<=720][vcodec^=avc]/bv*+ba/b",
         "outtmpl": str(dl_dir / "%(id)s.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
@@ -444,7 +444,21 @@ def _download_video(url: str, cache_dir: Path) -> Path:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         dl = (info.get("requested_downloads") or [{}])[0]
-        return Path(dl.get("filepath") or ydl.prepare_filename(info))
+    out = Path(dl.get("filepath") or ydl.prepare_filename(info))
+    if _probe_video(out) is not None:
+        return out
+    # codec cv2 can't read (e.g. AV1-only video) → transcode once to h264
+    import subprocess
+    conv = out.with_name(out.stem + ".cv.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(out),
+         "-c:v", "libx264", "-preset", "fast", "-c:a", "copy", str(conv)],
+        capture_output=True, timeout=600,
+    )
+    if conv.is_file() and _probe_video(conv) is not None:
+        return conv
+    conv.unlink(missing_ok=True)
+    raise RuntimeError("downloaded video uses a codec we can't decode")
 
 
 class SelectScreen(Screen):
